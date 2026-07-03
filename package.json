@@ -1,0 +1,36 @@
+{
+  "name": "codex-intercom",
+  "version": "0.1.0",
+  "description": "Codex MCP plugin for direct local messaging with Pi and Codex coding-agent sessions.",
+  "license": "MIT",
+  "type": "module",
+  "main": "codex/server.ts",
+  "files": [
+    "codex/**/*.ts",
+    "broker/**/*.ts",
+    "skills/**/*",
+    "types.ts",
+    "config.ts",
+    ".codex-plugin/**/*",
+    ".mcp.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "codex:mcp": "tsx codex/server.ts",
+    "test": "tsx --test broker/client.test.ts broker/framing.test.ts broker/paths.test.ts broker/spawn.test.ts codex/runtime.test.ts codex/mcp-protocol.test.ts"
+  },
+  "keywords": [
+    "codex",
+    "mcp",
+    "intercom",
+    "multi-agent",
+    "pi"
+  ],
+  "dependencies": {
+    "tsx": "^4.20.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

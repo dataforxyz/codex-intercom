@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "codex-intercom": {
+      "command": "npx",
+      "args": [
+        "--no-install",
+        "tsx",
+        "./codex/server.ts"
+      ]
+    }
+  }
+}
