@@ -1,15 +1,24 @@
 import { once } from "node:events";
+import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
-import { CodexAppServerClient, type JsonRpcMessage } from "./app-server-client.ts";
+import { CodexAppServerClient, defaultServerRequestResponse, type JsonRpcMessage } from "./app-server-client.ts";
 import { loadBridgeConfig, loadBridgeState, saveBridgeState, type BridgeAgentConfig, type BridgeConfig, type BridgeState } from "./bridge-config.ts";
 import { IntercomClient } from "../broker/client.ts";
 import { spawnBrokerIfNeeded } from "../broker/spawn.ts";
 import { loadConfig } from "../config.ts";
 import type { Message, SessionInfo } from "../types.ts";
+import { formatAttachments, formatSessionList, resolveSessionTarget, type ToolResult } from "./runtime.ts";
 
 interface TurnWaiter {
   from: SessionInfo;
   message: Message;
+}
+
+interface ToolReplyWaiter {
+  from: string;
+  resolve: (message: Message) => void;
+  reject: (error: Error) => void;
+  timeout: NodeJS.Timeout;
 }
 
 function formatMessage(from: SessionInfo, message: Message, agent: BridgeAgentConfig): string {
@@ -84,12 +93,67 @@ function getCompletedAgentText(params: unknown): string | null {
   return raw.type === "agentMessage" && typeof raw.text === "string" ? raw.text : null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asString(value: unknown, name: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${name} must be a non-empty string`);
+  return value;
+}
+
+function normalizeToolName(name: string): string {
+  const mcpMatch = name.match(/(?:^|__)intercom_(whoami|status|list|set_summary|send|ask|pending|reply)$/);
+  if (mcpMatch) return `intercom_${mcpMatch[1]}`;
+  return name;
+}
+
+function parseToolArguments(value: unknown): Record<string, unknown> {
+  if (value === undefined || value === null) return {};
+  if (typeof value === "string") {
+    const parsed: unknown = value.trim() ? JSON.parse(value) : {};
+    if (!isRecord(parsed)) throw new Error("tool arguments must be an object");
+    return parsed;
+  }
+  if (!isRecord(value)) throw new Error("tool arguments must be an object");
+  return value;
+}
+
+function extractToolCall(message: JsonRpcMessage): { threadId: string | null; name: string; args: Record<string, unknown> } {
+  const params = isRecord(message.params) ? message.params : {};
+  const nested = ["toolCall", "tool", "call", "item"]
+    .map((key) => params[key])
+    .find(isRecord) ?? {};
+  const rawName = params.name ?? params.toolName ?? params.tool_name ?? nested.name ?? nested.toolName ?? nested.tool_name;
+  if (typeof rawName !== "string") throw new Error("item/tool/call did not include a tool name");
+  const rawArgs = params.arguments ?? params.args ?? params.input ?? nested.arguments ?? nested.args ?? nested.input;
+  const threadId = typeof params.threadId === "string" ? params.threadId : null;
+  return { threadId, name: normalizeToolName(rawName), args: parseToolArguments(rawArgs) };
+}
+
+function textToolResult(text: string, structuredContent?: Record<string, unknown>, isError = false): ToolResult {
+  return {
+    content: [{ type: "text", text }],
+    ...(structuredContent ? { structuredContent } : {}),
+    ...(isError ? { isError: true } : {}),
+  };
+}
+
+function appServerToolResponse(result: ToolResult): unknown {
+  return {
+    success: !result.isError,
+    contentItems: result.content,
+    ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
+  };
+}
+
 export class VirtualCodexAgent {
   private client = new IntercomClient();
   private threadId: string | null;
   private activeTurnId: string | null = null;
   private waiters = new Map<string, TurnWaiter[]>();
   private finalMessages = new Map<string, string>();
+  private toolReplyWaiters = new Map<string, ToolReplyWaiter>();
 
   constructor(
     private readonly agent: BridgeAgentConfig,
@@ -194,6 +258,17 @@ export class VirtualCodexAgent {
   }
 
   private async handleMessage(from: SessionInfo, message: Message): Promise<void> {
+    const toolWaiter = this.toolReplyWaiters.get(message.replyTo ?? "");
+    if (toolWaiter) {
+      const fromMatches = from.id === toolWaiter.from || from.name?.toLowerCase() === toolWaiter.from.toLowerCase();
+      if (fromMatches) {
+        this.toolReplyWaiters.delete(message.replyTo ?? "");
+        clearTimeout(toolWaiter.timeout);
+        toolWaiter.resolve(message);
+        return;
+      }
+    }
+
     const threadId = await this.ensureThread();
     const input = [textInput(formatMessage(from, message, this.agent))];
     let turnId: string;
@@ -246,6 +321,97 @@ export class VirtualCodexAgent {
       });
     }
   }
+
+  async handleToolCall(name: string, args: Record<string, unknown>): Promise<unknown> {
+    try {
+      const result = await this.callIntercomTool(name, args);
+      return appServerToolResponse(result);
+    } catch (error) {
+      return appServerToolResponse(textToolResult(error instanceof Error ? error.message : String(error), { ok: false }, true));
+    }
+  }
+
+  private async callIntercomTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+    switch (name) {
+      case "intercom_whoami":
+        return textToolResult(
+          `session_id: ${this.agent.id}\nname: ${this.agent.name}\ncwd: ${this.agent.cwd}`,
+          { session_id: this.agent.id, name: this.agent.name, cwd: this.agent.cwd, model: this.agent.model ?? "codex-app-server" },
+        );
+      case "intercom_status": {
+        const sessions = await this.client.listSessions();
+        return textToolResult(
+          `Connected: Yes\nSession ID: ${this.agent.id}\nActive sessions: ${sessions.length}`,
+          { connected: true, session_id: this.agent.id, active_sessions: sessions.length },
+        );
+      }
+      case "intercom_list": {
+        const includeSelf = typeof args.include_self === "boolean" ? args.include_self : false;
+        const sessions = (await this.client.listSessions()).filter((session) => includeSelf || session.id !== this.agent.id);
+        return textToolResult(formatSessionList(sessions, this.agent.id, this.agent.cwd), { sessions });
+      }
+      case "intercom_set_summary": {
+        const summary = asString(args.summary, "summary");
+        this.client.updatePresence({ status: summary.trim() || "idle" });
+        return textToolResult("Summary updated.", { ok: true, summary });
+      }
+      case "intercom_send": {
+        const to = asString(args.to, "to");
+        const message = asString(args.message, "message");
+        const sendTo = await this.resolveTarget(to);
+        const result = await this.client.send(sendTo, { text: message });
+        if (!result.delivered) {
+          return textToolResult(`Message to "${to}" was not delivered: ${result.reason ?? "Session may not exist or has disconnected."}`, { ok: false, message_id: result.id, reason: result.reason }, true);
+        }
+        return textToolResult(`Message sent to ${to}.`, { ok: true, message_id: result.id, to });
+      }
+      case "intercom_ask": {
+        const to = asString(args.to, "to");
+        const message = asString(args.message, "message");
+        const sendTo = await this.resolveTarget(to);
+        const questionId = randomUUID();
+        const replyPromise = this.waitForToolReply(sendTo, questionId);
+        const result = await this.client.send(sendTo, { messageId: questionId, text: message, expectsReply: true });
+        if (!result.delivered) {
+          this.rejectToolReply(questionId, new Error(result.reason ?? "Session may not exist or has disconnected."));
+          return textToolResult(`Message to "${to}" was not delivered: ${result.reason ?? "Session may not exist or has disconnected."}`, { ok: false, message_id: result.id, reason: result.reason }, true);
+        }
+        const reply = await replyPromise;
+        return textToolResult(`Reply from ${to}:\n${reply.content.text}${formatAttachments(reply.content.attachments)}`, { ok: true, message_id: result.id, reply });
+      }
+      case "intercom_pending":
+        return textToolResult("No unread messages.", { unread_messages: [], pending_asks: [] });
+      case "intercom_reply":
+        return textToolResult("No matching pending ask. App-server sidecar asks are answered automatically by final assistant messages.", { ok: false }, true);
+      default:
+        return textToolResult(`Unknown tool: ${name}`, { ok: false }, true);
+    }
+  }
+
+  private async resolveTarget(to: string): Promise<string> {
+    const sessions = await this.client.listSessions();
+    return resolveSessionTarget(sessions, to) ?? to;
+  }
+
+  private waitForToolReply(from: string, replyTo: string): Promise<Message> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.toolReplyWaiters.delete(replyTo);
+        this.client.cancelAsk(replyTo);
+        reject(new Error(`No reply from "${from}" before timeout`));
+      }, 120000);
+      this.toolReplyWaiters.set(replyTo, { from, resolve, reject, timeout });
+    });
+  }
+
+  private rejectToolReply(replyTo: string, error: Error): void {
+    const waiter = this.toolReplyWaiters.get(replyTo);
+    if (!waiter) return;
+    clearTimeout(waiter.timeout);
+    this.toolReplyWaiters.delete(replyTo);
+    waiter.reject(error);
+    this.client.cancelAsk(replyTo);
+  }
 }
 
 export class CodexBridgeDaemon {
@@ -254,6 +420,7 @@ export class CodexBridgeDaemon {
 
   constructor(private readonly config: BridgeConfig) {
     this.app = new CodexAppServerClient(config.appServer);
+    this.app.setServerRequestHandler((message) => this.handleServerRequest(message));
   }
 
   async start(): Promise<void> {
@@ -273,6 +440,30 @@ export class CodexBridgeDaemon {
     for (const agent of this.agents) await agent.stop().catch(() => undefined);
     await this.app.disconnect();
   }
+
+  private async handleServerRequest(message: JsonRpcMessage): Promise<unknown> {
+    if (message.method === "mcpServer/elicitation/request" && isIntercomToolApprovalRequest(message.params)) {
+      return { action: "accept", content: {}, _meta: null };
+    }
+
+    if (message.method !== "item/tool/call") {
+      if (!message.method) throw new Error("Unsupported app-server request");
+      return defaultServerRequestResponse(message.method);
+    }
+
+    const call = extractToolCall(message);
+    const agent = call.threadId
+      ? this.agents.find((candidate) => candidate.ownsThread(call.threadId!))
+      : this.agents[0];
+    if (!agent) return appServerToolResponse(textToolResult("No bridge agent owns this tool call.", { ok: false }, true));
+    return agent.handleToolCall(call.name, call.args);
+  }
+}
+
+function isIntercomToolApprovalRequest(params: unknown): boolean {
+  if (!isRecord(params)) return false;
+  const meta = isRecord(params._meta) ? params._meta : {};
+  return params.serverName === "codex-intercom" && meta.codex_approval_kind === "mcp_tool_call";
 }
 
 async function main(): Promise<void> {

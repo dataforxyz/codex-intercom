@@ -17,6 +17,7 @@ export interface CodexAppServerClientOptions {
   args?: string[];
   transport?: "stdio" | "unix-websocket";
   socketPath?: string;
+  serverRequestHandler?: (message: JsonRpcMessage) => unknown | Promise<unknown>;
   startDaemon?: boolean;
   startDaemonCommand?: string;
   startDaemonArgs?: string[];
@@ -74,11 +75,16 @@ export class CodexAppServerClient extends EventEmitter {
       args: options.args ?? ["app-server"],
       transport: options.transport ?? "stdio",
       socketPath: options.socketPath ?? "",
+      serverRequestHandler: options.serverRequestHandler ?? defaultServerRequestResponseFromMessage,
       startDaemon: options.startDaemon ?? false,
       startDaemonCommand: options.startDaemonCommand ?? "codex",
       startDaemonArgs: options.startDaemonArgs ?? ["app-server", "daemon", "start"],
       requestTimeoutMs: options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     };
+  }
+
+  setServerRequestHandler(handler: (message: JsonRpcMessage) => unknown | Promise<unknown>): void {
+    this.options.serverRequestHandler = handler;
   }
 
   async connect(): Promise<void> {
@@ -403,11 +409,7 @@ export class CodexAppServerClient extends EventEmitter {
     }
 
     if (message.method && message.id !== undefined) {
-      try {
-        this.respond(message.id, defaultServerRequestResponse(message.method));
-      } catch (error) {
-        this.respondError(message.id, -32601, asError(error).message);
-      }
+      void this.handleServerRequest(message);
       this.emit("serverRequest", message);
       return;
     }
@@ -425,4 +427,23 @@ export class CodexAppServerClient extends EventEmitter {
     }
     this.pending.clear();
   }
+
+  private async handleServerRequest(message: JsonRpcMessage): Promise<void> {
+    try {
+      if (process.env.CODEX_INTERCOM_DEBUG_TOOL_CALLS) {
+        process.stderr.write(`app-server request ${message.method ?? "unknown"}: ${JSON.stringify(message.params ?? {})}\n`);
+      }
+      this.respond(message.id, await this.options.serverRequestHandler(message));
+    } catch (error) {
+      if (process.env.CODEX_INTERCOM_DEBUG_TOOL_CALLS) {
+        process.stderr.write(`app-server request failed ${message.method ?? "unknown"}: ${asError(error).message}\n`);
+      }
+      this.respondError(message.id, -32601, asError(error).message);
+    }
+  }
+}
+
+function defaultServerRequestResponseFromMessage(message: JsonRpcMessage): unknown {
+  if (!message.method) throw new Error("Unsupported app-server request");
+  return defaultServerRequestResponse(message.method);
 }
