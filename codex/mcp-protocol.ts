@@ -27,6 +27,14 @@ function asBoolean(value: unknown, defaultValue: boolean): boolean {
   return typeof value === "boolean" ? value : defaultValue;
 }
 
+function asOptionalPositiveInteger(value: unknown, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
 function asAttachmentArray(value: unknown) {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) throw new Error("attachments must be an array");
@@ -122,11 +130,17 @@ export function buildToolDefinitions(runtime: CodexIntercomRuntime): ToolDefinit
           to: { type: "string" },
           message: { type: "string" },
           attachments: attachmentsSchema,
+          timeout_ms: { type: "integer", minimum: 1, description: "Maximum time to wait for a reply before returning an error." },
         },
         required: ["to", "message"],
         additionalProperties: false,
       },
-      handler: async (args) => runtime.ask(asString(args.to, "to"), asString(args.message, "message"), asAttachmentArray(args.attachments)),
+      handler: async (args) => runtime.ask(
+        asString(args.to, "to"),
+        asString(args.message, "message"),
+        asAttachmentArray(args.attachments),
+        asOptionalPositiveInteger(args.timeout_ms, "timeout_ms"),
+      ),
     },
     {
       name: "intercom_pending",

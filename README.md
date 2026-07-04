@@ -160,7 +160,8 @@ Ask and wait:
 ```typescript
 intercom_ask({
   to: "planner",
-  message: "Should retry apply only to idempotent endpoints?"
+  message: "Should retry apply only to idempotent endpoints?",
+  timeout_ms: 120000
 })
 ```
 
@@ -191,7 +192,8 @@ Wake an app-server-backed virtual worker:
 ```typescript
 intercom_ask({
   to: "codex-worker",
-  message: "Please inspect the latest failing test and reply with the likely cause."
+  message: "Please inspect the latest failing test and reply with the likely cause.",
+  timeout_ms: 120000
 })
 ```
 
@@ -230,8 +232,9 @@ or an alternate one such as `CODEX_HOME=~/.codex-alt`.
 Current limitation: the sidecar can be messaged while the `coi` process is
 running and will wake an app-server-backed Codex turn. It does not make every
 ordinary `codex` process wakeable; launch the agent through `coi` when you want
-this behavior. Sidecar-originated intercom sends are capped per turn and per
-minute to prevent unattended ping-pong loops.
+this behavior. Blocking asks can set `timeout_ms`; sidecar asks default to 120
+seconds. Sidecar-originated intercom sends are capped per turn and per minute to
+prevent unattended ping-pong loops.
 
 ## Relationship To Pi Intercom
 

@@ -9,7 +9,7 @@ function fakeRuntime() {
     list: async () => ({ content: [{ type: "text" as const, text: "sessions" }], structuredContent: { sessions: [] } }),
     setSummary: async (summary: string) => ({ content: [{ type: "text" as const, text: `summary:${summary}` }] }),
     send: async (to: string, message: string) => ({ content: [{ type: "text" as const, text: `send:${to}:${message}` }] }),
-    ask: async (to: string, message: string) => ({ content: [{ type: "text" as const, text: `ask:${to}:${message}` }] }),
+    ask: async (to: string, message: string, _attachments?: unknown, timeoutMs?: number) => ({ content: [{ type: "text" as const, text: `ask:${to}:${message}:${timeoutMs ?? "default"}` }] }),
     pending: async () => ({ content: [{ type: "text" as const, text: "pending" }] }),
     reply: async (message: string) => ({ content: [{ type: "text" as const, text: `reply:${message}` }] }),
   } as any;
@@ -42,6 +42,19 @@ test("tools/call dispatches to the selected tool", async () => {
   }, fakeRuntime());
 
   assert.equal(((response?.result as any).content[0]).text, "send:worker:hello");
+});
+
+test("tools/call passes ask timeout through", async () => {
+  const response = await handleMcpRequest({
+    id: 5,
+    method: "tools/call",
+    params: {
+      name: "intercom_ask",
+      arguments: { to: "worker", message: "hello", timeout_ms: 2500 },
+    },
+  }, fakeRuntime());
+
+  assert.equal(((response?.result as any).content[0]).text, "ask:worker:hello:2500");
 });
 
 test("tools/call reports validation errors as tool errors", async () => {

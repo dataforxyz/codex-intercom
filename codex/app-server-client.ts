@@ -3,6 +3,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:chil
 import { randomBytes, createHash } from "node:crypto";
 import net from "node:net";
 import readline from "node:readline";
+import { setTimeout as delay } from "node:timers/promises";
 
 export interface JsonRpcMessage {
   id?: string | number | null;
@@ -32,6 +33,7 @@ interface PendingRequest {
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_WEBSOCKET_MESSAGE_BYTES = 16 * 1024 * 1024;
+const UNIX_WEBSOCKET_CONNECT_TIMEOUT_MS = 10000;
 
 export interface DecodedWebSocketFrame {
   opcode: number;
@@ -241,7 +243,31 @@ export class CodexAppServerClient extends EventEmitter {
     this.proc?.stdin.write(`${json}\n`);
   }
 
-  private connectUnixWebSocket(): Promise<void> {
+  private async connectUnixWebSocket(): Promise<void> {
+    const deadline = Date.now() + UNIX_WEBSOCKET_CONNECT_TIMEOUT_MS;
+    let lastError: Error | null = null;
+    let attempt = 0;
+
+    while (Date.now() < deadline) {
+      try {
+        await this.connectUnixWebSocketOnce();
+        return;
+      } catch (error) {
+        lastError = asError(error);
+        this.socket?.destroy();
+        this.socket = null;
+        const code = (lastError as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ECONNREFUSED") throw lastError;
+        const backoffMs = Math.min(250, 25 * (2 ** attempt));
+        attempt += 1;
+        await delay(backoffMs);
+      }
+    }
+
+    throw new Error(`Codex app-server WebSocket did not become ready within ${Math.round(UNIX_WEBSOCKET_CONNECT_TIMEOUT_MS / 1000)} seconds${lastError ? `: ${lastError.message}` : ""}`);
+  }
+
+  private connectUnixWebSocketOnce(): Promise<void> {
     const socketPath = this.options.socketPath;
     if (!socketPath) return Promise.reject(new Error("socketPath is required for unix-websocket transport"));
 

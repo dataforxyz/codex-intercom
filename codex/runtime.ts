@@ -191,13 +191,13 @@ export class CodexIntercomRuntime {
     }
   }
 
-  private waitForReply(from: string, replyTo: string): Promise<Message> {
+  private waitForReply(from: string, replyTo: string, timeoutMs = getAskTimeoutMs()): Promise<Message> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.replyWaiters.delete(replyTo);
         this.client?.cancelAsk(replyTo);
-        reject(new Error(`No reply from "${from}" within ${Math.round(getAskTimeoutMs() / 1000)} seconds`));
-      }, getAskTimeoutMs());
+        reject(new Error(`No reply from "${from}" within ${Math.round(timeoutMs / 1000)} seconds`));
+      }, timeoutMs);
       this.replyWaiters.set(replyTo, { from, replyTo, resolve, reject, timeout });
     });
   }
@@ -266,11 +266,11 @@ export class CodexIntercomRuntime {
     return textResult(`Message sent to ${to}.`, { ok: true, message_id: result.id, to });
   }
 
-  async ask(to: string, message: string, attachments?: Attachment[]): Promise<ToolResult> {
+  async ask(to: string, message: string, attachments?: Attachment[], timeoutMs = getAskTimeoutMs()): Promise<ToolResult> {
     const client = await this.connect();
     const sendTo = await this.resolveTarget(to);
     const questionId = randomUUID();
-    const replyPromise = this.waitForReply(sendTo, questionId);
+    const replyPromise = this.waitForReply(sendTo, questionId, timeoutMs);
     try {
       const result = await client.send(sendTo, {
         messageId: questionId,

@@ -33,6 +33,7 @@ const APPROVED_INTERCOM_TOOLS = new Set([
 ]);
 const MAX_TOOL_MESSAGES_PER_TURN = 8;
 const MAX_TOOL_MESSAGES_PER_MINUTE = 30;
+const DEFAULT_TOOL_ASK_TIMEOUT_MS = 120000;
 
 function formatMessage(from: SessionInfo, message: Message, agent: BridgeAgentConfig): string {
   const replyInstruction = message.expectsReply
@@ -112,6 +113,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${name} must be a non-empty string`);
+  return value;
+}
+
+function asOptionalPositiveInteger(value: unknown, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`);
   return value;
 }
 
@@ -420,9 +427,10 @@ export class VirtualCodexAgent {
         if (limit) return limit;
         const to = asString(args.to, "to");
         const message = asString(args.message, "message");
+        const timeoutMs = asOptionalPositiveInteger(args.timeout_ms, "timeout_ms") ?? DEFAULT_TOOL_ASK_TIMEOUT_MS;
         const sendTo = await this.resolveTarget(to);
         const questionId = randomUUID();
-        const replyPromise = this.waitForToolReply(sendTo, questionId);
+        const replyPromise = this.waitForToolReply(sendTo, questionId, timeoutMs);
         const result = await this.client.send(sendTo, { messageId: questionId, text: message, expectsReply: true });
         if (!result.delivered) {
           this.rejectToolReply(questionId, new Error(result.reason ?? "Session may not exist or has disconnected."));
@@ -463,13 +471,13 @@ export class VirtualCodexAgent {
     return resolveSessionTarget(sessions, to) ?? to;
   }
 
-  private waitForToolReply(from: string, replyTo: string): Promise<Message> {
+  private waitForToolReply(from: string, replyTo: string, timeoutMs = DEFAULT_TOOL_ASK_TIMEOUT_MS): Promise<Message> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.toolReplyWaiters.delete(replyTo);
         this.client.cancelAsk(replyTo);
-        reject(new Error(`No reply from "${from}" before timeout`));
-      }, 120000);
+        reject(new Error(`No reply from "${from}" within ${Math.round(timeoutMs / 1000)} seconds`));
+      }, timeoutMs);
       this.toolReplyWaiters.set(replyTo, { from, resolve, reject, timeout });
     });
   }
