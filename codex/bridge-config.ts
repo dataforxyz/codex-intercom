@@ -20,6 +20,8 @@ export interface BridgeConfig {
   appServer?: {
     command?: string;
     args?: string[];
+    transport?: "stdio" | "unix-websocket";
+    socketPath?: string;
     startDaemon?: boolean;
     startDaemonCommand?: string;
     startDaemonArgs?: string[];
@@ -90,6 +92,8 @@ export function loadBridgeConfig(path = process.env.CODEX_INTERCOM_BRIDGE_CONFIG
   const appServer = isRecord(parsed.appServer) ? {
     command: optionalString(parsed.appServer.command, "appServer.command"),
     args: Array.isArray(parsed.appServer.args) ? parsed.appServer.args.map((arg, index) => requireString(arg, `appServer.args[${index}]`)) : undefined,
+    transport: parsed.appServer.transport === "unix-websocket" || parsed.appServer.transport === "stdio" ? parsed.appServer.transport : undefined,
+    socketPath: optionalString(parsed.appServer.socketPath, "appServer.socketPath"),
     startDaemon: typeof parsed.appServer.startDaemon === "boolean" ? parsed.appServer.startDaemon : undefined,
     startDaemonCommand: optionalString(parsed.appServer.startDaemonCommand, "appServer.startDaemonCommand"),
     startDaemonArgs: Array.isArray(parsed.appServer.startDaemonArgs) ? parsed.appServer.startDaemonArgs.map((arg, index) => requireString(arg, `appServer.startDaemonArgs[${index}]`)) : undefined,

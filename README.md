@@ -118,19 +118,25 @@ network-disabled sandboxing. Override `approvalPolicy` or `sandboxPolicy` in
 the agent config only when you explicitly want a background worker to have more
 authority.
 
-The bridge defaults to spawning `codex app-server` directly. If your Codex
-install supports the managed app-server daemon, you can opt into proxy mode:
+The bridge defaults to spawning `codex app-server` directly over JSONL stdio.
+For a separately managed app-server socket, use Unix WebSocket transport:
 
 ```json
 {
   "appServer": {
-    "startDaemon": true,
-    "args": ["app-server", "proxy"]
+    "transport": "unix-websocket",
+    "socketPath": "/home/you/.pi/agent/intercom/codex.sock"
   },
   "agents": [
     { "id": "codex-worker", "cwd": "/home/you/src/project" }
   ]
 }
+```
+
+Start that socket separately with:
+
+```bash
+codex app-server --listen unix:///home/you/.pi/agent/intercom/codex.sock
 ```
 
 ## Examples
@@ -189,6 +195,34 @@ intercom_ask({
   message: "Please inspect the latest failing test and reply with the likely cause."
 })
 ```
+
+## `coi` Sidecar Launcher
+
+`coi` starts a per-agent Codex app-server socket, registers an intercom sidecar
+for that socket, then launches an interactive Codex UI attached to the same
+socket.
+
+```bash
+npm run coi -- --profile cliproxy
+```
+
+Useful sidecar flags:
+
+```bash
+npm run coi -- --name api-worker --id api-worker --profile cliproxy
+npm run coi -- --cwd /home/you/src/project --instructions "Reply tersely."
+npm run coi -- --no-tui --name smoke-worker
+```
+
+Everything not recognized as a sidecar flag is passed through to `codex
+--remote`, so existing profile/model/sandbox flags still work. The sidecar
+inherits `CODEX_HOME`, which means it can be used from either a normal Codex
+environment or an alternate one such as `CODEX_HOME=~/.codex-alt`.
+
+Current limitation: the sidecar can be messaged while the `coi` process is
+running and will wake an app-server-backed Codex turn. It does not make every
+ordinary `codex` process wakeable; launch the agent through `coi` when you want
+this behavior.
 
 ## Relationship To Pi Intercom
 

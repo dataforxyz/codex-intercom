@@ -24,12 +24,14 @@ test("loadBridgeConfig parses agents and app-server options", () => {
     const path = join(dir, "config.json");
     writeFileSync(path, JSON.stringify({
       statePath: join(dir, "state.json"),
-      appServer: { command: "codex", args: ["app-server"], startDaemon: false },
+      appServer: { command: "codex", args: ["app-server"], transport: "unix-websocket", socketPath: "/tmp/codex.sock", startDaemon: false },
       agents: [{ id: "worker", cwd: dir, instructions: "Stay terse." }],
     }));
     const config = loadBridgeConfig(path);
     assert.equal(config.statePath, join(dir, "state.json"));
     assert.deepEqual(config.appServer?.args, ["app-server"]);
+    assert.equal(config.appServer?.transport, "unix-websocket");
+    assert.equal(config.appServer?.socketPath, "/tmp/codex.sock");
     assert.equal(config.appServer?.startDaemon, false);
     assert.equal(config.agents[0].name, "worker");
     assert.equal(config.agents[0].instructions, "Stay terse.");

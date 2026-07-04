@@ -19,6 +19,7 @@
   "scripts": {
     "codex:mcp": "tsx codex/server.ts",
     "codex:bridge": "tsx codex/bridge-daemon.ts",
+    "coi": "tsx codex/coi.ts",
     "test": "tsx --test broker/client.test.ts broker/framing.test.ts broker/paths.test.ts broker/spawn.test.ts codex/*.test.ts"
   },
   "keywords": [
