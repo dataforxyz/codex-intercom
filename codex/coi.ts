@@ -27,6 +27,11 @@ interface IdentityInput {
   branch?: string | null;
 }
 
+interface BridgeRuntimeConfig {
+  approvalPolicy?: string;
+  sandboxPolicy?: Record<string, unknown>;
+}
+
 const CODEX_OPTIONS_WITH_VALUE = new Set([
   "-a",
   "--ask-for-approval",
@@ -97,6 +102,79 @@ function readValue(args: string[], index: number, option: string): string {
     throw new Error(`${option} requires a value`);
   }
   return value;
+}
+
+function camelSandboxType(mode: string): string {
+  switch (mode) {
+    case "read-only":
+      return "readOnly";
+    case "workspace-write":
+      return "workspaceWrite";
+    case "danger-full-access":
+      return "dangerFullAccess";
+    default:
+      throw new Error(`Unsupported sandbox mode: ${mode}`);
+  }
+}
+
+function readCodexFlagValue(args: string[], index: number, option: string): { value: string; nextIndex: number } {
+  const arg = args[index];
+  const inline = arg.includes("=") ? arg.split(/=(.*)/s, 2)[1] : undefined;
+  if (inline !== undefined) return { value: inline, nextIndex: index };
+  return { value: readValue(args, index, option), nextIndex: index + 1 };
+}
+
+export function deriveBridgeAgentRuntimeConfig(args: string[], cwd: string): BridgeRuntimeConfig {
+  let approvalPolicy: string | undefined;
+  let sandboxMode: string | undefined;
+  const writableRoots = new Set<string>([resolve(cwd)]);
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    const optionName = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+
+    switch (optionName) {
+      case "--ask-for-approval":
+      case "-a": {
+        const parsed = readCodexFlagValue(args, index, optionName);
+        approvalPolicy = parsed.value;
+        index = parsed.nextIndex;
+        break;
+      }
+      case "--sandbox":
+      case "-s": {
+        const parsed = readCodexFlagValue(args, index, optionName);
+        sandboxMode = parsed.value;
+        index = parsed.nextIndex;
+        break;
+      }
+      case "--add-dir": {
+        const parsed = readCodexFlagValue(args, index, optionName);
+        writableRoots.add(resolve(cwd, parsed.value));
+        index = parsed.nextIndex;
+        break;
+      }
+      case "--dangerously-bypass-approvals-and-sandbox":
+      case "--yolo":
+        approvalPolicy = "never";
+        sandboxMode = "danger-full-access";
+        break;
+      default:
+        break;
+    }
+  }
+
+  const sandboxType = sandboxMode ? camelSandboxType(sandboxMode) : undefined;
+  const sandboxPolicy = sandboxType === "workspaceWrite"
+    ? { type: sandboxType, writableRoots: [...writableRoots], networkAccess: false }
+    : sandboxType
+      ? { type: sandboxType, ...(sandboxType === "readOnly" ? { networkAccess: false } : {}) }
+      : undefined;
+
+  return {
+    ...(approvalPolicy ? { approvalPolicy } : {}),
+    ...(sandboxPolicy ? { sandboxPolicy } : {}),
+  };
 }
 
 export function parseCoiArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): CoiOptions {
@@ -306,6 +384,7 @@ export async function runCoi(options: CoiOptions): Promise<number> {
       cwd: options.cwd,
       model: process.env.CODEX_INTERCOM_MODEL,
       instructions: options.instructions,
+      ...deriveBridgeAgentRuntimeConfig(options.codexArgs, options.cwd),
     }],
   };
   daemon = new CodexBridgeDaemon(config);

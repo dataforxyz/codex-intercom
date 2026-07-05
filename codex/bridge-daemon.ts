@@ -81,6 +81,24 @@ function getThreadId(result: unknown): string {
   return (thread as Record<string, string>).id;
 }
 
+export function threadSandboxMode(sandboxPolicy: unknown): string {
+  if (!sandboxPolicy || typeof sandboxPolicy !== "object" || Array.isArray(sandboxPolicy)) return "read-only";
+  const type = (sandboxPolicy as Record<string, unknown>).type;
+  switch (type) {
+    case "readOnly":
+    case "read-only":
+      return "read-only";
+    case "workspaceWrite":
+    case "workspace-write":
+      return "workspace-write";
+    case "dangerFullAccess":
+    case "danger-full-access":
+      return "danger-full-access";
+    default:
+      return "read-only";
+  }
+}
+
 function getTurnId(result: unknown): string {
   const turn = result && typeof result === "object" ? (result as Record<string, unknown>).turn : undefined;
   if (!turn || typeof turn !== "object" || typeof (turn as Record<string, unknown>).id !== "string") {
@@ -299,12 +317,13 @@ export class VirtualCodexAgent {
   async ensureThread(): Promise<string> {
     if (this.threadId) {
       try {
+        const sandbox = threadSandboxMode(this.agent.sandboxPolicy);
         await this.app.request("thread/resume", {
           threadId: this.threadId,
           cwd: this.agent.cwd,
           model: this.agent.model ?? null,
           approvalPolicy: this.agent.approvalPolicy ?? "never",
-          sandbox: "read-only",
+          sandbox,
         });
         return this.threadId;
       } catch {
@@ -312,11 +331,12 @@ export class VirtualCodexAgent {
       }
     }
 
+    const sandbox = threadSandboxMode(this.agent.sandboxPolicy);
     const result = await this.app.request("thread/start", {
       cwd: this.agent.cwd,
       model: this.agent.model ?? null,
       approvalPolicy: this.agent.approvalPolicy ?? "never",
-      sandbox: "read-only",
+      sandbox,
       serviceName: "codex-intercom",
       developerInstructions: this.agent.instructions ?? null,
       threadSource: "integration",

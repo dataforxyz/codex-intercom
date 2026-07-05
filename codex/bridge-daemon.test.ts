@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getApprovedIntercomSend, getApprovedIntercomToolFromApproval, getCompletedIntercomSend, isIntercomToolApprovalRequest } from "./bridge-daemon.ts";
+import { getApprovedIntercomSend, getApprovedIntercomToolFromApproval, getCompletedIntercomSend, isIntercomToolApprovalRequest, threadSandboxMode } from "./bridge-daemon.ts";
 
 test("isIntercomToolApprovalRequest accepts exact codex-intercom tools", () => {
   const params = {
@@ -74,4 +74,11 @@ test("getApprovedIntercomSend extracts approved intercom_send tool params", () =
       tool_params: { to: "manager", message: "ACK" },
     },
   }), null);
+});
+
+test("threadSandboxMode maps bridge sandbox policies to codex thread modes", () => {
+  assert.equal(threadSandboxMode({ type: "readOnly" }), "read-only");
+  assert.equal(threadSandboxMode({ type: "workspaceWrite" }), "workspace-write");
+  assert.equal(threadSandboxMode({ type: "dangerFullAccess" }), "danger-full-access");
+  assert.equal(threadSandboxMode(undefined), "read-only");
 });

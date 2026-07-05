@@ -129,6 +129,12 @@ Everything not recognized as a sidecar flag is passed through to
 `codex resume --remote`, so normal Codex flags still work. Prompt arguments are
 placed after the resumed sidecar thread ID.
 
+`coi` also applies Codex runtime flags such as `--sandbox`,
+`--ask-for-approval`, and `--add-dir` to wake-triggered sidecar turns. For
+example, `coi --name worker-a --id worker-a --sandbox workspace-write` lets
+intercom-woken turns write inside the worker workspace instead of falling back
+to read-only.
+
 The sidecar inherits `CODEX_HOME`, which makes it useful with a normal Codex
 home or a dedicated minimal home.
 

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanupOldCoiStateFiles, createDefaultIdentity, hasCodexHelpOrVersion, parseCoiArgs, sanitizeSegment, splitCodexResumeArgs } from "./coi.ts";
+import { cleanupOldCoiStateFiles, createDefaultIdentity, deriveBridgeAgentRuntimeConfig, hasCodexHelpOrVersion, parseCoiArgs, sanitizeSegment, splitCodexResumeArgs } from "./coi.ts";
 
 test("sanitizeSegment keeps readable safe ids", () => {
   assert.equal(sanitizeSegment("Codex:Repo Main#123"), "codex:repo-main-123");
@@ -64,6 +64,33 @@ test("splitCodexResumeArgs respects explicit separator", () => {
 test("hasCodexHelpOrVersion detects commands that should not force resume", () => {
   assert.equal(hasCodexHelpOrVersion(["--help"]), true);
   assert.equal(hasCodexHelpOrVersion(["--profile", "cliproxy"]), false);
+});
+
+test("deriveBridgeAgentRuntimeConfig carries workspace-write sandbox roots", () => {
+  assert.deepEqual(deriveBridgeAgentRuntimeConfig([
+    "--sandbox", "workspace-write",
+    "--add-dir", "../shared",
+    "--ask-for-approval=on-request",
+  ], "/tmp/project"), {
+    approvalPolicy: "on-request",
+    sandboxPolicy: {
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/project", "/tmp/shared"],
+      networkAccess: false,
+    },
+  });
+});
+
+test("deriveBridgeAgentRuntimeConfig supports short and bypass flags", () => {
+  assert.deepEqual(deriveBridgeAgentRuntimeConfig(["-s=read-only", "-a", "never"], "/tmp/project"), {
+    approvalPolicy: "never",
+    sandboxPolicy: { type: "readOnly", networkAccess: false },
+  });
+
+  assert.deepEqual(deriveBridgeAgentRuntimeConfig(["--dangerously-bypass-approvals-and-sandbox"], "/tmp/project"), {
+    approvalPolicy: "never",
+    sandboxPolicy: { type: "dangerFullAccess" },
+  });
 });
 
 test("cleanupOldCoiStateFiles removes only stale coi state files", () => {

@@ -1593,6 +1593,23 @@ function getThreadId(result) {
   }
   return thread.id;
 }
+function threadSandboxMode(sandboxPolicy) {
+  if (!sandboxPolicy || typeof sandboxPolicy !== "object" || Array.isArray(sandboxPolicy)) return "read-only";
+  const type = sandboxPolicy.type;
+  switch (type) {
+    case "readOnly":
+    case "read-only":
+      return "read-only";
+    case "workspaceWrite":
+    case "workspace-write":
+      return "workspace-write";
+    case "dangerFullAccess":
+    case "danger-full-access":
+      return "danger-full-access";
+    default:
+      return "read-only";
+  }
+}
 function getTurnId(result) {
   const turn = result && typeof result === "object" ? result.turn : void 0;
   if (!turn || typeof turn !== "object" || typeof turn.id !== "string") {
@@ -1786,23 +1803,25 @@ var VirtualCodexAgent = class {
   async ensureThread() {
     if (this.threadId) {
       try {
+        const sandbox2 = threadSandboxMode(this.agent.sandboxPolicy);
         await this.app.request("thread/resume", {
           threadId: this.threadId,
           cwd: this.agent.cwd,
           model: this.agent.model ?? null,
           approvalPolicy: this.agent.approvalPolicy ?? "never",
-          sandbox: "read-only"
+          sandbox: sandbox2
         });
         return this.threadId;
       } catch {
         this.threadId = null;
       }
     }
+    const sandbox = threadSandboxMode(this.agent.sandboxPolicy);
     const result = await this.app.request("thread/start", {
       cwd: this.agent.cwd,
       model: this.agent.model ?? null,
       approvalPolicy: this.agent.approvalPolicy ?? "never",
-      sandbox: "read-only",
+      sandbox,
       serviceName: "codex-intercom",
       developerInstructions: this.agent.instructions ?? null,
       threadSource: "integration"
@@ -2159,5 +2178,6 @@ export {
   getApprovedIntercomSend,
   getApprovedIntercomToolFromApproval,
   getCompletedIntercomSend,
-  isIntercomToolApprovalRequest
+  isIntercomToolApprovalRequest,
+  threadSandboxMode
 };

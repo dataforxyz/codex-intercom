@@ -1601,6 +1601,23 @@ function getThreadId(result) {
   }
   return thread.id;
 }
+function threadSandboxMode(sandboxPolicy) {
+  if (!sandboxPolicy || typeof sandboxPolicy !== "object" || Array.isArray(sandboxPolicy)) return "read-only";
+  const type = sandboxPolicy.type;
+  switch (type) {
+    case "readOnly":
+    case "read-only":
+      return "read-only";
+    case "workspaceWrite":
+    case "workspace-write":
+      return "workspace-write";
+    case "dangerFullAccess":
+    case "danger-full-access":
+      return "danger-full-access";
+    default:
+      return "read-only";
+  }
+}
 function getTurnId(result) {
   const turn = result && typeof result === "object" ? result.turn : void 0;
   if (!turn || typeof turn !== "object" || typeof turn.id !== "string") {
@@ -1794,23 +1811,25 @@ var VirtualCodexAgent = class {
   async ensureThread() {
     if (this.threadId) {
       try {
+        const sandbox2 = threadSandboxMode(this.agent.sandboxPolicy);
         await this.app.request("thread/resume", {
           threadId: this.threadId,
           cwd: this.agent.cwd,
           model: this.agent.model ?? null,
           approvalPolicy: this.agent.approvalPolicy ?? "never",
-          sandbox: "read-only"
+          sandbox: sandbox2
         });
         return this.threadId;
       } catch {
         this.threadId = null;
       }
     }
+    const sandbox = threadSandboxMode(this.agent.sandboxPolicy);
     const result = await this.app.request("thread/start", {
       cwd: this.agent.cwd,
       model: this.agent.model ?? null,
       approvalPolicy: this.agent.approvalPolicy ?? "never",
-      sandbox: "read-only",
+      sandbox,
       serviceName: "codex-intercom",
       developerInstructions: this.agent.instructions ?? null,
       threadSource: "integration"
@@ -2225,6 +2244,68 @@ function readValue(args, index, option) {
   }
   return value;
 }
+function camelSandboxType(mode) {
+  switch (mode) {
+    case "read-only":
+      return "readOnly";
+    case "workspace-write":
+      return "workspaceWrite";
+    case "danger-full-access":
+      return "dangerFullAccess";
+    default:
+      throw new Error(`Unsupported sandbox mode: ${mode}`);
+  }
+}
+function readCodexFlagValue(args, index, option) {
+  const arg = args[index];
+  const inline = arg.includes("=") ? arg.split(/=(.*)/s, 2)[1] : void 0;
+  if (inline !== void 0) return { value: inline, nextIndex: index };
+  return { value: readValue(args, index, option), nextIndex: index + 1 };
+}
+function deriveBridgeAgentRuntimeConfig(args, cwd) {
+  let approvalPolicy;
+  let sandboxMode;
+  const writableRoots = /* @__PURE__ */ new Set([resolve3(cwd)]);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    const optionName = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+    switch (optionName) {
+      case "--ask-for-approval":
+      case "-a": {
+        const parsed = readCodexFlagValue(args, index, optionName);
+        approvalPolicy = parsed.value;
+        index = parsed.nextIndex;
+        break;
+      }
+      case "--sandbox":
+      case "-s": {
+        const parsed = readCodexFlagValue(args, index, optionName);
+        sandboxMode = parsed.value;
+        index = parsed.nextIndex;
+        break;
+      }
+      case "--add-dir": {
+        const parsed = readCodexFlagValue(args, index, optionName);
+        writableRoots.add(resolve3(cwd, parsed.value));
+        index = parsed.nextIndex;
+        break;
+      }
+      case "--dangerously-bypass-approvals-and-sandbox":
+      case "--yolo":
+        approvalPolicy = "never";
+        sandboxMode = "danger-full-access";
+        break;
+      default:
+        break;
+    }
+  }
+  const sandboxType = sandboxMode ? camelSandboxType(sandboxMode) : void 0;
+  const sandboxPolicy = sandboxType === "workspaceWrite" ? { type: sandboxType, writableRoots: [...writableRoots], networkAccess: false } : sandboxType ? { type: sandboxType, ...sandboxType === "readOnly" ? { networkAccess: false } : {} } : void 0;
+  return {
+    ...approvalPolicy ? { approvalPolicy } : {},
+    ...sandboxPolicy ? { sandboxPolicy } : {}
+  };
+}
 function parseCoiArgs(argv, env = process.env) {
   const codexArgs = [];
   const options = {};
@@ -2411,7 +2492,8 @@ async function runCoi(options) {
       name,
       cwd: options.cwd,
       model: process.env.CODEX_INTERCOM_MODEL,
-      instructions: options.instructions
+      instructions: options.instructions,
+      ...deriveBridgeAgentRuntimeConfig(options.codexArgs, options.cwd)
     }]
   };
   daemon = new CodexBridgeDaemon(config);
@@ -2454,6 +2536,7 @@ if (process.argv[1] && (basename2(process.argv[1]) === "coi.ts" || basename2(pro
 export {
   cleanupOldCoiStateFiles,
   createDefaultIdentity,
+  deriveBridgeAgentRuntimeConfig,
   hasCodexHelpOrVersion,
   parseCoiArgs,
   runCoi,
