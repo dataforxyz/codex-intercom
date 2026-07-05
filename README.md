@@ -214,9 +214,22 @@ worker easy to launch:
 ```bash
 cim() {
   local home="${CODEX_MIN_HOME:-$HOME/.codex-min-intercom}"
-  CODEX_HOME="$home" coi --name codex-min "$@"
+  local yolo="${CODEX_YOLO:-1}"
+  case "${1:-}" in
+    yolo|--yolo|on) shift; yolo=1 ;;
+    safe|--safe|off) shift; yolo=0 ;;
+  esac
+  local args=(--name codex-min)
+  [ "$yolo" = 1 ] && args+=(--dangerously-bypass-approvals-and-sandbox)
+  CODEX_HOME="$home" coi "${args[@]}" "$@"
 }
 ```
+
+This alias intentionally defaults the minimal worker to yolo mode: no approval
+prompts and no filesystem sandbox. Use it only for workers you trust with the
+current machine account, or remove the bypass flag when you want a safer
+workspace-scoped worker. Use `cim safe ...` or set `CODEX_YOLO=0` to launch
+without the bypass flag.
 
 Use it like:
 
@@ -224,6 +237,7 @@ Use it like:
 cim --name worker-a --id worker-a
 cim --name reviewer --id reviewer --instructions "Review only; do not edit files."
 cim --no-tui --name background-worker --id background-worker
+cim safe --name safe-worker --id safe-worker --sandbox workspace-write
 ```
 
 If you are developing this repository from a checkout instead of installing the
@@ -241,7 +255,14 @@ Or point an alias directly at the checkout:
 cim() {
   local home="${CODEX_MIN_HOME:-$HOME/.codex-min-intercom}"
   local repo="${CODEX_INTERCOM_REPO:-/absolute/path/to/codex-intercom}"
-  CODEX_HOME="$home" node "$repo/dist/coi.mjs" --name codex-min "$@"
+  local yolo="${CODEX_YOLO:-1}"
+  case "${1:-}" in
+    yolo|--yolo|on) shift; yolo=1 ;;
+    safe|--safe|off) shift; yolo=0 ;;
+  esac
+  local args=(--name codex-min)
+  [ "$yolo" = 1 ] && args+=(--dangerously-bypass-approvals-and-sandbox)
+  CODEX_HOME="$home" node "$repo/dist/coi.mjs" "${args[@]}" "$@"
 }
 ```
 
