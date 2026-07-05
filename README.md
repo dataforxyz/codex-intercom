@@ -5,278 +5,145 @@
   <img src="./assets/logo-generated.png" alt="Codex Intercom generated PNG logo" width="96" height="96">
 </p>
 
-Codex MCP plugin for direct local messaging with Pi and Codex coding-agent
-sessions on the same machine.
+Codex Intercom adds local messaging between Codex, Pi, and other coding-agent
+sessions on the same machine. It speaks the same local broker protocol as
+`pi-intercom`, so sessions can discover each other, send updates, ask blocking
+questions, read pending messages, and reply to asks.
 
-Codex Intercom speaks the same local broker protocol as `pi-intercom`, so Codex
-sessions can list Pi sessions, send direct messages, ask blocking questions,
-check pending inbound messages, and reply to pending asks.
+The project has two related pieces:
+
+- `codex-intercom-mcp`: an MCP server that exposes intercom tools inside a
+  normal Codex session.
+- `coi`: a wakeable Codex sidecar launcher. It starts a Codex app-server,
+  registers an intercom identity, and starts Codex turns when another session
+  sends it work.
+
+Use plain MCP when you only need tools inside an already-active Codex turn. Use
+`coi` when you want another session to wake the worker automatically.
 
 ## Status
 
 Preview. This is the Codex-side adapter split out of `pi-intercom`.
 
-Codex MCP does not currently provide Pi-style unsolicited turn wake-up. Incoming
-messages are queued while this MCP server is running; call `intercom_pending`
-to read unread messages and unresolved asks.
+Plain Codex MCP sessions do not receive Pi-style unsolicited visible turns.
+Incoming messages are queued while the MCP server is running; call
+`intercom_pending` to read them. Wake-on-message workflows require `coi` or the
+app-server bridge.
 
-For wake-on-message workflows, run the app-server bridge daemon. It publishes
-configured virtual Codex workers as intercom sessions. Messages sent to those
-workers create or resume Codex app-server threads and start a turn; blocking
-asks are answered with the worker's final assistant message.
+## Install
 
-## Tools
-
-- `intercom_whoami`
-- `intercom_status`
-- `intercom_list`
-- `intercom_set_summary`
-- `intercom_send`
-- `intercom_ask`
-- `intercom_pending`
-- `intercom_reply`
-
-## Local Setup
-
-Use the built MCP server for a stable local install:
+For normal use, install the package so the command-line entry points are on
+`PATH`:
 
 ```bash
-git clone https://github.com/dataforxyz/codex-intercom.git
-cd codex-intercom
-npm install
-npm run build
-codex mcp add codex-intercom -- node ./dist/codex-server.mjs
+npm install -g github:dataforxyz/codex-intercom
 ```
 
-For development, you can keep running the TypeScript source directly:
+This provides:
+
+- `codex-intercom-mcp`
+- `codex-intercom-bridge`
+- `coi`
+
+Then add the MCP server to Codex:
 
 ```bash
-codex mcp add codex-intercom-dev -- npx --no-install tsx ./codex/server.ts
+codex mcp add codex-intercom -- codex-intercom-mcp
 ```
 
-Use either the built install or the dev install in a given Codex profile. Running
-both at the same time can register duplicate intercom MCP tools.
-
-Optional identity variables:
-
-```bash
-CODEX_INTERCOM_NAME=planner
-CODEX_INTERCOM_SESSION_ID=codex-planner
-CODEX_INTERCOM_MODEL=codex
-```
-
-When Codex launches the MCP server, those variables must be configured on the
-MCP server itself. Per-command variables passed to `codex exec` are not
-forwarded into the MCP server process.
+Optional MCP identity variables can be attached at registration time:
 
 ```bash
 codex mcp add codex-planner \
   --env CODEX_INTERCOM_NAME=planner \
   --env CODEX_INTERCOM_SESSION_ID=codex-planner \
-  -- node /absolute/path/to/codex-intercom/dist/codex-server.mjs
+  --env CODEX_INTERCOM_MODEL=codex \
+  -- codex-intercom-mcp
 ```
 
-For ad hoc multi-Codex runs, the easiest discovery flow is to have the receiver
-call `intercom_set_summary` with a unique role or token, then have the sender
-call `intercom_list` and target the matching session ID.
+Per-command environment variables passed to `codex exec` are not forwarded into
+the MCP server process. Configure identity on the MCP server entry when you need
+stable names or IDs.
 
-## Codex Plugin
+## Plugin Use
 
-This repo includes Codex plugin metadata:
+This repo also includes Codex plugin metadata:
 
 - `.codex-plugin/plugin.json`
 - `.mcp.json`
 - `skills/codex-intercom/SKILL.md`
 
-The plugin runs the MCP server with:
+The plugin packages the MCP server and the optional intercom skill. It is useful
+when you want Codex to install and manage the intercom integration as a plugin.
+For a deliberately minimal profile, prefer direct MCP configuration with
+`codex-intercom-mcp`; that lets you disable plugins and skills while keeping the
+intercom tools.
 
-```bash
-node ./dist/codex-server.mjs
-```
+## Tools
 
-That means a local checkout needs `npm install` and `npm run build` before
-Codex starts the MCP server. The installed plugin does not need `tsx` at
-runtime; the built server starts the bundled broker with `node`.
+- `intercom_whoami`: show this session's intercom ID, name, cwd, and model.
+- `intercom_status`: show connection status and pending message counts.
+- `intercom_list`: list local Pi and Codex sessions.
+- `intercom_set_summary`: publish a short discoverable status.
+- `intercom_send`: send a non-blocking message.
+- `intercom_ask`: send a question and wait for the target's reply.
+- `intercom_pending`: read queued inbound messages and unresolved asks.
+- `intercom_reply`: reply to a pending inbound ask.
 
-The plugin install path is separate from the dev MCP path above. Installing and
-enabling the plugin makes its bundled MCP server and skill available in new
-Codex threads; leaving it uninstalled or disabled does not affect a direct MCP
-setup.
-
-## App-Server Bridge
-
-Use the bridge when the receiver should not have to keep an interactive Codex
-turn open just to notice messages.
-
-Create a bridge config:
-
-```json
-{
-  "statePath": "/home/you/.pi/agent/intercom/codex-bridge-state.json",
-  "agents": [
-    {
-      "id": "codex-worker",
-      "name": "codex-worker",
-      "cwd": "/home/you/src/project",
-      "model": "gpt-5.5",
-      "instructions": "Reply concisely. Ask before making destructive changes."
-    }
-  ]
-}
-```
-
-Start it:
-
-```bash
-npm run codex:bridge -- --config /home/you/.pi/agent/intercom/codex-bridge.json
-```
-
-Then other local sessions can target `codex-worker` with `intercom_send` or
-`intercom_ask`. The bridge stores each worker's app-server `threadId` in
-`statePath`, so later messages continue the same Codex thread.
-
-By default, bridge turns run with `approvalPolicy: "never"` and read-only,
-network-disabled sandboxing. Override `approvalPolicy` or `sandboxPolicy` in
-the agent config only when you explicitly want a background worker to have more
-authority.
-
-The bridge defaults to spawning `codex app-server` directly over JSONL stdio.
-For a separately managed app-server socket, use Unix WebSocket transport:
-
-```json
-{
-  "appServer": {
-    "transport": "unix-websocket",
-    "socketPath": "/home/you/.pi/agent/intercom/codex.sock"
-  },
-  "agents": [
-    { "id": "codex-worker", "cwd": "/home/you/src/project" }
-  ]
-}
-```
-
-Start that socket separately with:
-
-```bash
-codex app-server --listen unix:///home/you/.pi/agent/intercom/codex.sock
-```
-
-## Examples
-
-List sessions:
+Example:
 
 ```typescript
 intercom_list({ scope: "machine" })
-```
 
-Send a non-blocking update:
-
-```typescript
-intercom_send({
-  to: "worker",
-  message: "I found the failing test. Check src/api/client.test.ts."
-})
-```
-
-Ask and wait:
-
-```typescript
 intercom_ask({
-  to: "planner",
-  message: "Should retry apply only to idempotent endpoints?",
+  to: "worker-a",
+  message: "Please inspect the failing test and reply with the likely cause.",
   timeout_ms: 45000
 })
 ```
 
-Blocking asks default to 45 seconds and reject waits over 120 seconds. For
-longer-running work, use `intercom_send` and check later with
-`intercom_pending` instead of blocking the agent turn. If Codex cancels the
-tool call, the pending ask is cancelled immediately.
+Blocking asks default to a short bounded wait and reject waits over 120 seconds.
+For longer work, use `intercom_send` and check later with `intercom_pending`.
 
-Check and reply:
-
-```typescript
-intercom_pending({ mark_read: false })
-intercom_reply({ message: "Use GET/PUT/DELETE only, max 3 retries." })
-```
-
-Two-Codex handoff pattern:
-
-```typescript
-// Receiver
-intercom_set_summary({ summary: "worker: retry tests" })
-intercom_pending({ mark_read: true })
-
-// Sender
-intercom_list({ scope: "machine", include_self: true })
-intercom_send({
-  to: "codex-session-id-from-list",
-  message: "Retry tests are ready; please check the pending failure."
-})
-```
-
-Wake an app-server-backed virtual worker:
-
-```typescript
-intercom_ask({
-  to: "codex-worker",
-  message: "Please inspect the latest failing test and reply with the likely cause.",
-  timeout_ms: 45000
-})
-```
-
-## `coi` Sidecar Launcher
+## Wakeable Workers With `coi`
 
 `coi` starts a per-agent Codex app-server socket, registers an intercom sidecar
 for that socket, creates or resumes the sidecar's app-server thread, then
-launches an interactive Codex UI attached to that same socket and thread.
+launches an interactive Codex UI attached to the same socket and thread.
+
+Start a named worker:
 
 ```bash
-npm run coi -- --profile cliproxy
+coi --name worker-a --id worker-a
 ```
 
-Build or link the installable command:
+Useful flags:
 
 ```bash
-npm run build
-npm link
-codex mcp add codex-intercom -- codex-intercom-mcp
-codex-intercom-bridge --config /home/you/.pi/agent/intercom/codex-bridge.json
-coi --profile cliproxy
+coi --name api-worker --id api-worker
+coi --cwd /path/to/project --instructions "Reply tersely. Ask before destructive changes."
+coi --no-tui --name background-worker --id background-worker
 ```
 
-Useful sidecar flags:
+Everything not recognized as a sidecar flag is passed through to
+`codex resume --remote`, so normal Codex flags still work. Prompt arguments are
+placed after the resumed sidecar thread ID.
 
-```bash
-npm run coi -- --name api-worker --id api-worker --profile cliproxy
-npm run coi -- --cwd /home/you/src/project --instructions "Reply tersely."
-npm run coi -- --no-tui --name smoke-worker
-```
+The sidecar inherits `CODEX_HOME`, which makes it useful with a normal Codex
+home or a dedicated minimal home.
 
-Everything not recognized as a sidecar flag is passed through to `codex
-resume --remote`, so existing profile/model/sandbox flags still work. Prompt
-arguments are placed after the resumed sidecar thread id. The sidecar inherits
-`CODEX_HOME`, which means it can be used from either a normal Codex environment
-or an alternate one such as `CODEX_HOME=~/.codex-alt`.
+## Minimal Wakeable Profile
 
-Current limitation: the sidecar can be messaged while the `coi` process is
-running and will wake an app-server-backed Codex turn. It does not make every
-ordinary `codex` process wakeable; launch the agent through `coi` when you want
-this behavior. Blocking asks can set `timeout_ms`; sidecar asks default to 45
-seconds and reject waits over 120 seconds. Sidecar-originated intercom sends are
-capped per turn and per minute to prevent unattended ping-pong loops.
+A minimal profile is useful for workers that should stay focused on code and
+coordination. It reduces prompt/tool surface area by isolating the worker from
+your normal Codex config, memories, plugins, browser surfaces, image generation,
+and extra skills. Keep goals and multi-agent support on so the worker can track
+the task and delegate subtasks.
 
-## Minimal Wakeable Codex Profile
-
-Use a separate `CODEX_HOME` when you want a small Codex environment dedicated to
-intercom work. This avoids your normal Codex config, memories, plugins, and
-installed skills while still keeping `coi` wake-on-message behavior.
-
-Create the home and config:
+Create a dedicated Codex home:
 
 ```bash
 export CODEX_MIN_HOME="$HOME/.codex-min-intercom"
-export CODEX_INTERCOM_REPO="/absolute/path/to/codex-intercom"
 mkdir -p "$CODEX_MIN_HOME"
 ```
 
@@ -316,19 +183,18 @@ hooks = false
 workspace_dependencies = false
 
 [mcp_servers.codex-intercom]
-command = "node"
-args = ["/absolute/path/to/codex-intercom/dist/codex-server.mjs"]
+command = "codex-intercom-mcp"
 ```
 
 After the first launch, Codex may populate system skills under the alternate
 home. To keep the profile minimal without deleting anything, list the skill
-paths and add per-skill disables:
+paths:
 
 ```bash
 find "$CODEX_MIN_HOME/skills" -name SKILL.md -print
 ```
 
-For each path you want disabled, add:
+For each skill you want disabled, add a config entry:
 
 ```toml
 [[skills.config]]
@@ -336,43 +202,153 @@ path = "/absolute/path/from/find/SKILL.md"
 enabled = false
 ```
 
-There is no required alias name, but a short one such as `cim` keeps the command
-easy to launch:
+There is no required alias name. A short alias such as `cim` keeps the minimal
+worker easy to launch:
 
 ```bash
 cim() {
   local home="${CODEX_MIN_HOME:-$HOME/.codex-min-intercom}"
-  local repo="${CODEX_INTERCOM_REPO:-$HOME/src/codex-intercom}"
-  CODEX_HOME="$home" node "$repo/dist/coi.mjs" --name codex-min "$@"
+  CODEX_HOME="$home" coi --name codex-min "$@"
 }
 ```
 
 Use it like:
 
 ```bash
-cim
-cim --id worker-a --instructions "Reply tersely."
-cim --no-tui --id background-worker
+cim --name worker-a --id worker-a
+cim --name reviewer --id reviewer --instructions "Review only; do not edit files."
+cim --no-tui --name background-worker --id background-worker
 ```
 
-This is intentionally not the same as launching plain `codex` with an MCP
-server. Plain MCP sessions can receive queued messages, but they do not wake
-automatically. `coi` is the part that registers an app-server sidecar and starts
-a Codex turn when another session sends `intercom_send` or `intercom_ask`.
+If you are developing this repository from a checkout instead of installing the
+package, build and link it:
+
+```bash
+npm install
+npm run build
+npm link
+```
+
+Or point an alias directly at the checkout:
+
+```bash
+cim() {
+  local home="${CODEX_MIN_HOME:-$HOME/.codex-min-intercom}"
+  local repo="${CODEX_INTERCOM_REPO:-/absolute/path/to/codex-intercom}"
+  CODEX_HOME="$home" node "$repo/dist/coi.mjs" --name codex-min "$@"
+}
+```
+
+## Manager And Worker Pattern
+
+Use one Codex session as the manager and one or more `coi` sessions as wakeable
+workers. The manager keeps the task shaped, feeds work to workers, watches for
+drift, and decides when the work is ready to finish.
+
+Example worker launch in `tmux`:
+
+```bash
+tmux new-session -d -s worker-a 'cd /path/to/project && cim --name worker-a --id worker-a'
+```
+
+Then ask the worker from the manager session:
+
+```typescript
+intercom_ask({
+  to: "worker-a",
+  message: "Please create a goal for the task, inspect the handoff, and report your first plan.",
+  timeout_ms: 45000
+})
+```
+
+Recommended manager prompt:
+
+```text
+Start a wakeable worker in tmux using the minimal intercom alias:
+
+  tmux new-session -d -s <worker-id> 'cd <repo> && cim --name <worker-id> --id <worker-id>'
+
+Give the worker a FEAT.md-style handoff:
+
+# FEAT: <short task name>
+Objective: <what must be true when done>
+Context: <repo, branch, issue, constraints, important files>
+Approach: <suggested first steps, but allow the worker to adjust>
+Verification: <commands/tests/checks that should pass>
+Definition of done: <clear finish criteria>
+Coordination: create a goal, use subagents when useful, keep the manager updated through intercom, ask before risky or broad changes, and keep work in a branch/worktree when appropriate.
+
+Tell the worker to create and maintain its own goal, use agents for parallel investigation or review, and report blockers early. As manager, keep sending focused follow-up work through intercom, keep the worker on task, and handle PR or final handoff when the implementation is ready.
+```
+
+For non-blocking delegation, use `intercom_send` and check back later. For a
+decision the manager needs before continuing, use `intercom_ask`.
+
+## App-Server Bridge
+
+Use `codex-intercom-bridge` when you want one process to publish one or more
+configured virtual Codex workers without launching an interactive TUI for each
+worker.
+
+Create a bridge config:
+
+```json
+{
+  "statePath": "/home/you/.pi/agent/intercom/codex-bridge-state.json",
+  "agents": [
+    {
+      "id": "codex-worker",
+      "name": "codex-worker",
+      "cwd": "/home/you/src/project",
+      "model": "gpt-5.5",
+      "instructions": "Reply concisely. Ask before making destructive changes."
+    }
+  ]
+}
+```
+
+Start it:
+
+```bash
+codex-intercom-bridge --config /home/you/.pi/agent/intercom/codex-bridge.json
+```
+
+Then other local sessions can target `codex-worker` with `intercom_send` or
+`intercom_ask`. The bridge stores each worker's app-server `threadId` in
+`statePath`, so later messages continue the same Codex thread.
+
+By default, bridge turns run with `approvalPolicy: "never"` and read-only,
+network-disabled sandboxing. Override `approvalPolicy` or `sandboxPolicy` in
+the agent config only when you explicitly want a background worker to have more
+authority.
+
+## Development
+
+Clone and run from source:
+
+```bash
+git clone https://github.com/dataforxyz/codex-intercom.git
+cd codex-intercom
+npm install
+npm run build
+npm test
+```
+
+For MCP development, register the TypeScript source directly:
+
+```bash
+codex mcp add codex-intercom-dev -- npx --no-install tsx ./codex/server.ts
+```
+
+Use either the built install or the dev install in a given Codex profile.
+Running both at the same time can register duplicate intercom MCP tools.
 
 ## Relationship To Pi Intercom
 
 `pi-intercom` remains the Pi-native extension with overlays, inline rendering,
-and Pi `triggerTurn` delivery. `codex-intercom` is the Codex MCP/plugin
-adapter plus an optional Codex app-server bridge for wake-on-message virtual
-workers.
+and Pi `triggerTurn` delivery. `codex-intercom` is the Codex MCP/plugin adapter
+plus wake-on-message Codex app-server sidecars.
 
 For now this repository vendors the minimal local broker/client protocol for
 compatibility. If the protocol stabilizes across multiple adapters, the shared
 parts should move into a small core package.
-
-## Test
-
-```bash
-npm test
-```
