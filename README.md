@@ -26,7 +26,9 @@ The project has two related pieces:
   sends it work.
 
 Use plain MCP when you only need tools inside an already-active Codex turn. Use
-`coi` when you want another session to wake the worker automatically.
+`coi` when you want another session to wake the worker automatically or when
+you want the host-level **Alt+I** contact shortcut. Codex's MCP interface can
+provide intercom tools, but it cannot add custom keybindings to the Codex TUI.
 
 ## Status
 
@@ -123,6 +125,19 @@ Start a named worker:
 ```bash
 coi --name worker-a --id worker-a
 ```
+
+If you launch wakeable workers often, a shell alias keeps `coi` distinct from a
+plain `codex` session:
+
+```bash
+alias codex-intercom='coi'
+```
+
+Then run `codex-intercom --name worker-a --id worker-a`. The alias is optional;
+the important part is launching through `coi`, because the wrapper owns the
+app-server sidecar that wakes on incoming work and the terminal integration
+that provides **Alt+I**. Starting `codex` directly with only the MCP server
+still provides intercom tools, but not those host-level behaviors.
 
 Useful flags:
 
@@ -341,12 +356,12 @@ Create a bridge config:
 
 ```json
 {
-  "statePath": "/home/you/.pi/agent/intercom/codex-bridge-state.json",
+  "statePath": "/path/to/intercom/codex-bridge-state.json",
   "agents": [
     {
       "id": "codex-worker",
       "name": "codex-worker",
-      "cwd": "/home/you/src/project",
+      "cwd": "/path/to/project",
       "model": "gpt-5.5",
       "instructions": "Reply concisely. Ask before making destructive changes."
     }
@@ -357,7 +372,7 @@ Create a bridge config:
 Start it:
 
 ```bash
-codex-intercom-bridge --config /home/you/.pi/agent/intercom/codex-bridge.json
+codex-intercom-bridge --config "$HOME/.config/codex-intercom/bridge.json"
 ```
 
 Then other local sessions can target `codex-worker` with `intercom_send` or
