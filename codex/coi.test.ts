@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildCodexAppServerArgs, cleanupOldCoiStateFiles, createDefaultIdentity, deriveBridgeAgentRuntimeConfig, hasCodexHelpOrVersion, parseCoiArgs, sanitizeSegment, splitCodexResumeArgs } from "./coi.ts";
+import { buildCodexAppServerArgs, cleanupOldCoiStateFiles, createDefaultIdentity, deriveBridgeAgentRuntimeConfig, hasCodexHelpOrVersion, parseCoiArgs, resolveCoiResumeRequest, sanitizeSegment, splitCodexResumeArgs } from "./coi.ts";
 import { filterAltIInput, TuiInputDecoder } from "./tui-input.ts";
 
 test("sanitizeSegment keeps readable safe ids", () => {
@@ -66,6 +66,14 @@ test("splitCodexResumeArgs respects explicit separator", () => {
   assert.deepEqual(splitCodexResumeArgs(["--no-alt-screen", "--", "--literal-prompt"]), {
     optionArgs: ["--no-alt-screen"],
     promptArgs: ["--literal-prompt"],
+  });
+});
+
+test("resolveCoiResumeRequest reuses an explicitly requested Codex thread", () => {
+  assert.deepEqual(resolveCoiResumeRequest(["--profile", "work", "resume", "thread-123", "continue this"]), {
+    optionArgs: ["--profile", "work"],
+    threadId: "thread-123",
+    promptArgs: ["continue this"],
   });
 });
 

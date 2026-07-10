@@ -293,6 +293,16 @@ export function splitCodexResumeArgs(args: string[]): { optionArgs: string[]; pr
   return { optionArgs, promptArgs };
 }
 
+export function resolveCoiResumeRequest(args: string[]): {
+  optionArgs: string[];
+  promptArgs: string[];
+  threadId?: string;
+} {
+  const { optionArgs, promptArgs } = splitCodexResumeArgs(args);
+  if (promptArgs[0] !== "resume" || !promptArgs[1]) return { optionArgs, promptArgs };
+  return { optionArgs, threadId: promptArgs[1], promptArgs: promptArgs.slice(2) };
+}
+
 export function buildCodexAppServerArgs(args: string[], socketPath: string): string[] {
   const { optionArgs } = splitCodexResumeArgs(args);
   const appServerArgs: string[] = [];
@@ -513,6 +523,7 @@ export async function runCoi(options: CoiOptions): Promise<number> {
 
   await waitForSocket(socketPath, appServer);
 
+  const resumeRequest = resolveCoiResumeRequest(options.codexArgs);
   const config: BridgeConfig = {
     statePath,
     appServer: {
@@ -525,6 +536,7 @@ export async function runCoi(options: CoiOptions): Promise<number> {
       cwd: options.cwd,
       model: process.env.CODEX_INTERCOM_MODEL,
       instructions: options.instructions,
+      threadId: resumeRequest.threadId,
       ...deriveBridgeAgentRuntimeConfig(options.codexArgs, options.cwd),
     }],
   };
@@ -540,7 +552,7 @@ export async function runCoi(options: CoiOptions): Promise<number> {
 
   const remote = `unix://${socketPath}`;
   const threadId = await daemon.ensureThreadForAgent(id);
-  const { optionArgs, promptArgs } = splitCodexResumeArgs(options.codexArgs);
+  const { optionArgs, promptArgs } = resumeRequest;
   process.stderr.write(`coi sidecar thread: ${threadId}\n`);
   const resolvedTuiArgs = ["resume", "--remote", remote, ...optionArgs, threadId, ...promptArgs];
   let copying = false;
