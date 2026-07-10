@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanupOldCoiStateFiles, createDefaultIdentity, deriveBridgeAgentRuntimeConfig, hasCodexHelpOrVersion, parseCoiArgs, sanitizeSegment, splitCodexResumeArgs } from "./coi.ts";
+import { buildCodexAppServerArgs, cleanupOldCoiStateFiles, createDefaultIdentity, deriveBridgeAgentRuntimeConfig, hasCodexHelpOrVersion, parseCoiArgs, sanitizeSegment, splitCodexResumeArgs } from "./coi.ts";
+import { filterAltIInput, TuiInputDecoder } from "./tui-input.ts";
 
 test("sanitizeSegment keeps readable safe ids", () => {
   assert.equal(sanitizeSegment("Codex:Repo Main#123"), "codex:repo-main-123");
@@ -33,6 +34,7 @@ test("parseCoiArgs consumes sidecar options and passes codex args through", () =
   assert.equal(parsed.name, "worker");
   assert.equal(parsed.id, "worker-1");
   assert.equal(parsed.noTui, true);
+  assert.equal(parsed.copyShortcut, true);
   assert.deepEqual(parsed.codexArgs, ["--profile", "cliproxy", "-m", "gpt-test"]);
 });
 
@@ -47,6 +49,12 @@ test("parseCoiArgs leaves everything after separator for codex", () => {
   assert.deepEqual(parsed.codexArgs, ["--name", "not-sidecar"]);
 });
 
+test("parseCoiArgs supports disabling the Alt+I terminal shortcut", () => {
+  assert.equal(parseCoiArgs(["--no-intercom-shortcut"], {}).copyShortcut, false);
+  assert.equal(parseCoiArgs([], { CODEX_INTERCOM_SHORTCUT: "off" }).copyShortcut, false);
+  assert.equal(parseCoiArgs(["--intercom-shortcut"], { CODEX_INTERCOM_SHORTCUT: "off" }).copyShortcut, true);
+});
+
 test("splitCodexResumeArgs keeps options before the resumed thread id", () => {
   assert.deepEqual(splitCodexResumeArgs(["--profile", "cliproxy", "-m", "gpt-test", "hello there"]), {
     optionArgs: ["--profile", "cliproxy", "-m", "gpt-test"],
@@ -59,6 +67,100 @@ test("splitCodexResumeArgs respects explicit separator", () => {
     optionArgs: ["--no-alt-screen"],
     promptArgs: ["--literal-prompt"],
   });
+});
+
+test("buildCodexAppServerArgs forwards only app-server-compatible config options", () => {
+  assert.deepEqual(
+    buildCodexAppServerArgs([
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--profile", "cliproxy",
+      "-c", 'model_provider="cliproxy"',
+      "--enable", "multi_agent",
+      "hello there",
+    ], "/tmp/coi.sock"),
+    [
+      "app-server",
+      "-c", 'model_provider="cliproxy"',
+      "--enable", "multi_agent",
+      "--listen", "unix:///tmp/coi.sock",
+    ],
+  );
+});
+
+test("filterAltIInput removes legacy and enhanced Alt+I press encodings", () => {
+  assert.deepEqual(filterAltIInput("before\x1biafter\x1b[105;3:1u!"), {
+    forwarded: "beforeafter!",
+    pending: "",
+    altICount: 2,
+  });
+  assert.deepEqual(filterAltIInput("\x1b[27;3;105~"), {
+    forwarded: "",
+    pending: "",
+    altICount: 1,
+  });
+});
+
+test("filterAltIInput consumes repeat and release events without retriggering", () => {
+  assert.deepEqual(filterAltIInput("\x1b[105;3:1u\x1b[105;3:2u\x1b[105;3:3u"), {
+    forwarded: "",
+    pending: "",
+    altICount: 1,
+  });
+});
+
+test("filterAltIInput accepts lock modifiers and alternate keyboard layouts", () => {
+  assert.deepEqual(filterAltIInput("\x1b[105;67u\x1b[1080::105;3u"), {
+    forwarded: "",
+    pending: "",
+    altICount: 2,
+  });
+});
+
+test("filterAltIInput preserves Alt+Shift+I and other modified keys", () => {
+  const input = "\x1b[105;4u\x1b[105;7u\x1b[106;3u";
+  assert.deepEqual(filterAltIInput(input), {
+    forwarded: input,
+    pending: "",
+    altICount: 0,
+  });
+});
+
+test("filterAltIInput carries split escape sequences between chunks", () => {
+  const first = filterAltIInput("hello\x1b[105;");
+  assert.deepEqual(first, { forwarded: "hello", pending: "\x1b[105;", altICount: 0 });
+  assert.deepEqual(filterAltIInput("3:1uworld", first.pending), {
+    forwarded: "world",
+    pending: "",
+    altICount: 1,
+  });
+});
+
+test("filterAltIInput preserves unrelated terminal escape sequences", () => {
+  assert.deepEqual(filterAltIInput("\x1b[A\x1b[200~paste\x1b[201~"), {
+    forwarded: "\x1b[A\x1b[200~paste\x1b[201~",
+    pending: "",
+    altICount: 0,
+  });
+});
+
+test("TuiInputDecoder preserves UTF-8 split across terminal chunks", () => {
+  const decoder = new TuiInputDecoder();
+  const bytes = Buffer.from("a🙂b");
+  const first = decoder.write(bytes.subarray(0, 3));
+  const second = decoder.write(bytes.subarray(3));
+  const ended = decoder.end();
+  assert.equal(first.forwarded + second.forwarded + ended.forwarded, "a🙂b");
+  assert.equal(first.altICount + second.altICount + ended.altICount, 0);
+});
+
+test("TuiInputDecoder carries and flushes partial escape sequences", () => {
+  const decoder = new TuiInputDecoder();
+  assert.deepEqual(decoder.write(Buffer.from("hello\x1b[105;")), { forwarded: "hello", altICount: 0 });
+  assert.equal(decoder.hasPendingEscape(), true);
+  assert.deepEqual(decoder.write(Buffer.from("3:1u")), { forwarded: "", altICount: 1 });
+  assert.equal(decoder.hasPendingEscape(), false);
+  decoder.write(Buffer.from("\x1b"));
+  assert.equal(decoder.flushPendingEscape(), "\x1b");
 });
 
 test("hasCodexHelpOrVersion detects commands that should not force resume", () => {

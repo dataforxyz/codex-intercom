@@ -4,6 +4,9 @@
   "description": "Codex MCP plugin for direct local messaging with Pi and Codex coding-agent sessions.",
   "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "main": "dist/codex-server.mjs",
   "bin": {
     "codex-intercom-mcp": "dist/codex-server.mjs",
@@ -39,6 +42,9 @@
     "multi-agent",
     "pi"
   ],
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
+  },
   "devDependencies": {
     "esbuild": "^0.28.1",
     "tsx": "^4.20.0",

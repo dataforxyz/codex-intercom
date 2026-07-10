@@ -31,7 +31,7 @@ await Promise.all([
     entryPoints: ["codex/coi.ts"],
     outfile: "dist/coi.mjs",
     banner: { js: "#!/usr/bin/env node" },
-    external: ["codex"],
+    external: ["codex", "node-pty"],
   }),
 ]);
 

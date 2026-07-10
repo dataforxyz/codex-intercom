@@ -2,7 +2,7 @@
 
 // codex/coi.ts
 import { once as once2 } from "node:events";
-import { spawn as spawn3, spawnSync as spawnSync2 } from "node:child_process";
+import { spawn as spawn4, spawnSync as spawnSync2 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
 import { existsSync as existsSync4, readdirSync, rmSync, statSync } from "node:fs";
 import { basename as basename2, join as join5, resolve as resolve3 } from "node:path";
@@ -1491,6 +1491,39 @@ function loadConfig() {
   }
 }
 
+// codex/contact.ts
+function duplicateSessionNames(sessions) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const session of sessions) {
+    const name = session.name?.trim().toLowerCase();
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
+}
+function chooseContactTarget(currentSession, sessions) {
+  const duplicates = duplicateSessionNames(sessions);
+  const name = currentSession.name?.trim() || void 0;
+  const duplicateName = Boolean(name && duplicates.has(name.toLowerCase()));
+  return {
+    target: name && !duplicateName ? name : currentSession.id,
+    id: currentSession.id,
+    ...name ? { name } : {},
+    duplicateName
+  };
+}
+function formatContactInstruction(contact) {
+  return `Intercom send ID: ${contact.target}`;
+}
+async function resolveContactTarget(id, name, listSessions) {
+  try {
+    const sessions = await listSessions();
+    const currentSession = sessions.find((session) => session.id === id);
+    if (currentSession) return chooseContactTarget(currentSession, sessions);
+  } catch {
+  }
+  return { target: id, id, ...name ? { name } : {}, duplicateName: false, fallback: true };
+}
+
 // codex/runtime.ts
 function formatAttachments(attachments) {
   if (!attachments?.length) return "";
@@ -1768,6 +1801,9 @@ var VirtualCodexAgent = class {
   }
   get id() {
     return this.agent.id;
+  }
+  async getContactTarget() {
+    return resolveContactTarget(this.agent.id, this.agent.name, () => this.client.listSessions());
   }
   ownsThread(threadId) {
     return this.threadId === threadId;
@@ -2112,6 +2148,11 @@ var CodexBridgeDaemon = class {
     if (!agent) throw new Error(`No bridge agent registered with id: ${agentId}`);
     return agent.ensureThread();
   }
+  async getContactTargetForAgent(agentId) {
+    const agent = this.agents.find((candidate) => candidate.id === agentId);
+    if (!agent) throw new Error(`No bridge agent registered with id: ${agentId}`);
+    return agent.getContactTarget();
+  }
   async handleServerRequest(message) {
     if (message.method === "mcpServer/elicitation/request" && isIntercomToolApprovalRequest(message.params)) {
       const threadId = getNotificationThreadId(message.params);
@@ -2181,11 +2222,236 @@ if (process.argv[1] && (basename(process.argv[1]) === "bridge-daemon.ts" || base
   });
 }
 
+// codex/clipboard.ts
+import { spawn as spawn3 } from "node:child_process";
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function runDetachedClipboardCommand(command, args, text, env, timeoutMs) {
+  return new Promise((resolve4) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve4(result);
+    };
+    const timeout = setTimeout(() => finish({ ok: false, error: `${command} did not start within ${timeoutMs}ms` }), timeoutMs);
+    try {
+      const proc = spawn3(command, args, { env, stdio: ["pipe", "ignore", "ignore"] });
+      proc.once("error", (error) => finish({ ok: false, error: error.message }));
+      proc.once("spawn", () => {
+        proc.stdin.on("error", () => {
+        });
+        proc.stdin.end(text);
+        proc.unref();
+        finish({ ok: true, method: command });
+      });
+    } catch (error) {
+      finish({ ok: false, error: errorMessage(error) });
+    }
+  });
+}
+function runClipboardCommand(command, args, text, env, timeoutMs) {
+  if (command === "wl-copy") return runDetachedClipboardCommand(command, args, text, env, timeoutMs);
+  return new Promise((resolve4) => {
+    let settled = false;
+    let stderr = "";
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve4(result);
+    };
+    const timeout = setTimeout(() => {
+      proc?.kill("SIGKILL");
+      finish({ ok: false, error: `${command} timed out after ${timeoutMs}ms` });
+    }, timeoutMs);
+    let proc;
+    try {
+      proc = spawn3(command, args, { env, stdio: ["pipe", "ignore", "pipe"] });
+      proc.stderr?.setEncoding("utf8");
+      proc.stderr?.on("data", (chunk) => {
+        if (stderr.length < 4096) stderr += chunk;
+      });
+      proc.once("error", (error) => finish({ ok: false, error: error.message }));
+      proc.once("close", (code) => {
+        finish(code === 0 ? { ok: true, method: command } : { ok: false, error: stderr.trim() || `${command} exited ${code}` });
+      });
+      proc.stdin.on("error", (error) => finish({ ok: false, error: error.message }));
+      proc.stdin.end(text);
+    } catch (error) {
+      finish({ ok: false, error: errorMessage(error) });
+    }
+  });
+}
+async function copyTextToClipboard(text, options = {}) {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const timeoutMs = options.timeoutMs ?? 2e3;
+  const candidates = [];
+  if (platform === "darwin") candidates.push(["pbcopy", []]);
+  else if (platform === "win32") candidates.push(["clip.exe", []]);
+  else {
+    if (env.WAYLAND_DISPLAY) candidates.push(["wl-copy", []]);
+    if (env.DISPLAY) {
+      candidates.push(["xclip", ["-selection", "clipboard"]]);
+      candidates.push(["xsel", ["--clipboard", "--input"]]);
+    }
+    candidates.push(["clip.exe", []]);
+  }
+  let lastError = "No clipboard command available";
+  for (const [command, args] of candidates) {
+    const result = await runClipboardCommand(command, args, text, env, timeoutMs);
+    if (result.ok) return result;
+    lastError = result.error ?? lastError;
+  }
+  return { ok: false, error: lastError };
+}
+function buildOsc52Sequence(text, env = process.env) {
+  const osc = `\x1B]52;c;${Buffer.from(text, "utf8").toString("base64")}\x07`;
+  return env.TMUX ? `\x1BPtmux;\x1B${osc}\x1B\\` : osc;
+}
+function copyTextToTerminalClipboard(text, write, env = process.env) {
+  try {
+    write(buildOsc52Sequence(text, env));
+    return { ok: true, method: "osc52" };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
+}
+
+// codex/tui-input.ts
+import { StringDecoder } from "node:string_decoder";
+var ESC = "\x1B";
+var ALT_MODIFIER_BIT = 2;
+var LOCK_MODIFIER_BITS = 192;
+var DISALLOWED_MODIFIER_BITS = 61;
+var KEY_I = 105;
+function parseNumber(value) {
+  if (!value || !/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+function isAltOnlyModifier(encodedModifier) {
+  const bits = encodedModifier - 1;
+  if (bits < 0 || (bits & ALT_MODIFIER_BIT) === 0) return false;
+  return (bits & DISALLOWED_MODIFIER_BITS) === 0 && (bits & ~(ALT_MODIFIER_BIT | LOCK_MODIFIER_BITS)) === 0;
+}
+function matchKittyAltI(sequence) {
+  if (!sequence.endsWith("u")) return { consume: false, trigger: false };
+  const params = sequence.slice(2, -1).split(";");
+  if (params.length < 2) return { consume: false, trigger: false };
+  const keyParts = params[0].split(":");
+  const primaryKey = parseNumber(keyParts[0]);
+  const baseLayoutKey = parseNumber(keyParts[2]);
+  const modifierParts = params[1].split(":");
+  const modifier = parseNumber(modifierParts[0]);
+  const eventType = modifierParts[1] === void 0 ? 1 : parseNumber(modifierParts[1]);
+  if (modifier === null || eventType === null || !isAltOnlyModifier(modifier)) {
+    return { consume: false, trigger: false };
+  }
+  if (primaryKey !== KEY_I && baseLayoutKey !== KEY_I) {
+    return { consume: false, trigger: false };
+  }
+  return { consume: true, trigger: eventType === 1 };
+}
+function matchModifyOtherKeysAltI(sequence) {
+  if (!sequence.endsWith("~")) return { consume: false, trigger: false };
+  const params = sequence.slice(2, -1).split(";");
+  if (params.length !== 3 || params[0] !== "27") return { consume: false, trigger: false };
+  const modifier = parseNumber(params[1]);
+  const key = parseNumber(params[2]);
+  const matches = modifier !== null && key === KEY_I && isAltOnlyModifier(modifier);
+  return { consume: matches, trigger: matches };
+}
+function matchAltISequence(sequence) {
+  if (sequence === `${ESC}i`) return { consume: true, trigger: true };
+  if (!sequence.startsWith(`${ESC}[`)) return { consume: false, trigger: false };
+  if (sequence.endsWith("u")) return matchKittyAltI(sequence);
+  if (sequence.endsWith("~")) return matchModifyOtherKeysAltI(sequence);
+  return { consume: false, trigger: false };
+}
+function findCsiEnd(source, start) {
+  for (let index = start + 2; index < source.length; index += 1) {
+    const code = source.charCodeAt(index);
+    if (code >= 64 && code <= 126) return index;
+  }
+  return -1;
+}
+function filterAltIInput(input, pending = "") {
+  const source = pending + input;
+  let forwarded = "";
+  let altICount = 0;
+  let index = 0;
+  while (index < source.length) {
+    if (source[index] !== ESC) {
+      forwarded += source[index];
+      index += 1;
+      continue;
+    }
+    if (index + 1 >= source.length) {
+      return { forwarded, pending: source.slice(index), altICount };
+    }
+    if (source[index + 1] === "i") {
+      altICount += 1;
+      index += 2;
+      continue;
+    }
+    if (source[index + 1] !== "[") {
+      forwarded += source[index];
+      index += 1;
+      continue;
+    }
+    const end = findCsiEnd(source, index);
+    if (end === -1) {
+      return { forwarded, pending: source.slice(index), altICount };
+    }
+    const sequence = source.slice(index, end + 1);
+    const match = matchAltISequence(sequence);
+    if (match.consume) {
+      if (match.trigger) altICount += 1;
+    } else {
+      forwarded += sequence;
+    }
+    index = end + 1;
+  }
+  return { forwarded, pending: "", altICount };
+}
+var TuiInputDecoder = class {
+  utf8 = new StringDecoder("utf8");
+  pending = "";
+  write(chunk) {
+    const text = typeof chunk === "string" ? chunk : this.utf8.write(chunk);
+    const filtered = filterAltIInput(text, this.pending);
+    this.pending = filtered.pending;
+    return { forwarded: filtered.forwarded, altICount: filtered.altICount };
+  }
+  hasPendingEscape() {
+    return this.pending.length > 0;
+  }
+  flushPendingEscape() {
+    const pending = this.pending;
+    this.pending = "";
+    return pending;
+  }
+  end() {
+    const filtered = filterAltIInput(this.utf8.end(), this.pending);
+    this.pending = "";
+    return {
+      forwarded: filtered.forwarded + filtered.pending,
+      altICount: filtered.altICount
+    };
+  }
+};
+
 // codex/coi.ts
 var CODEX_OPTIONS_WITH_VALUE = /* @__PURE__ */ new Set([
   "-a",
   "--ask-for-approval",
   "--add-dir",
+  "--disable",
+  "--enable",
   "-c",
   "--cd",
   "-C",
@@ -2243,6 +2509,13 @@ function readValue(args, index, option) {
     throw new Error(`${option} requires a value`);
   }
   return value;
+}
+function envFlagEnabled(value, defaultValue) {
+  if (value === void 0) return defaultValue;
+  const normalized = value.trim().toLowerCase();
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  return defaultValue;
 }
 function camelSandboxType(mode) {
   switch (mode) {
@@ -2351,6 +2624,13 @@ function parseCoiArgs(argv, env = process.env) {
       case "--intercom-no-tui":
         options.noTui = true;
         break;
+      case "--no-intercom-shortcut":
+      case "--intercom-no-shortcut":
+        options.copyShortcut = false;
+        break;
+      case "--intercom-shortcut":
+        options.copyShortcut = true;
+        break;
       default:
         codexArgs.push(arg);
         break;
@@ -2364,6 +2644,7 @@ function parseCoiArgs(argv, env = process.env) {
     socketPath: options.socketPath,
     statePath: options.statePath,
     noTui: options.noTui ?? false,
+    copyShortcut: options.copyShortcut ?? envFlagEnabled(env.CODEX_INTERCOM_SHORTCUT, true),
     codexCommand: env.CODEX_INTERCOM_CODEX_COMMAND || "codex",
     codexArgs
   };
@@ -2392,6 +2673,27 @@ function splitCodexResumeArgs(args) {
   promptArgs.push(...args.slice(index));
   return { optionArgs, promptArgs };
 }
+function buildCodexAppServerArgs(args, socketPath) {
+  const { optionArgs } = splitCodexResumeArgs(args);
+  const appServerArgs = [];
+  for (let index = 0; index < optionArgs.length; index += 1) {
+    const arg = optionArgs[index];
+    const optionName = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+    if (optionName === "--strict-config") {
+      appServerArgs.push(arg);
+      continue;
+    }
+    if (optionName !== "-c" && optionName !== "--config" && optionName !== "--enable" && optionName !== "--disable") {
+      continue;
+    }
+    appServerArgs.push(arg);
+    if (!arg.includes("=") && index + 1 < optionArgs.length) {
+      appServerArgs.push(optionArgs[index + 1]);
+      index += 1;
+    }
+  }
+  return ["app-server", ...appServerArgs, "--listen", `unix://${socketPath}`];
+}
 async function waitForSocket(socketPath, proc, timeoutMs = 1e4) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -2417,6 +2719,88 @@ async function stopChild(proc) {
     proc.kill("SIGTERM");
   });
 }
+function terminalNotification(message) {
+  const safe = message.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 200);
+  if (process.stdout.isTTY) process.stdout.write(`\x1B]9;${safe}\x1B\\`);
+  else process.stderr.write(`${safe}
+`);
+}
+async function runInteractiveTui(command, args, cwd, onAltI) {
+  const runInherited = async () => {
+    const tui2 = spawn4(command, args, { cwd, env: process.env, stdio: "inherit" });
+    const [code, signal] = await once2(tui2, "exit");
+    if (typeof code === "number") return code;
+    return signal === "SIGINT" ? 130 : 1;
+  };
+  if (!onAltI || !process.stdin.isTTY || !process.stdout.isTTY) {
+    return runInherited();
+  }
+  let nodePty;
+  try {
+    nodePty = await import("node-pty");
+  } catch (error) {
+    process.stderr.write(`coi: Alt+I unavailable because optional node-pty could not load: ${error instanceof Error ? error.message : String(error)}
+`);
+    return runInherited();
+  }
+  const tui = nodePty.spawn(command, args, {
+    name: process.env.TERM || "xterm-256color",
+    cols: process.stdout.columns || 80,
+    rows: process.stdout.rows || 24,
+    cwd,
+    env: process.env
+  });
+  const outputSubscription = tui.onData((data) => process.stdout.write(data));
+  const previousRawMode = Boolean(process.stdin.isRaw);
+  const inputDecoder = new TuiInputDecoder();
+  let pendingTimer = null;
+  const flushPending = () => {
+    const pending = inputDecoder.flushPendingEscape();
+    if (!pending) return;
+    try {
+      tui.write(pending);
+    } catch {
+    }
+    pendingTimer = null;
+  };
+  const onInput = (chunk) => {
+    if (pendingTimer) clearTimeout(pendingTimer);
+    const filtered = inputDecoder.write(chunk);
+    if (filtered.forwarded) tui.write(filtered.forwarded);
+    const controls = {
+      insertText(text) {
+        const safe = text.replace(/\x1b/g, "");
+        tui.write(`\x1B[200~${safe}\x1B[201~`);
+      }
+    };
+    for (let index = 0; index < filtered.altICount; index += 1) onAltI(controls);
+    pendingTimer = inputDecoder.hasPendingEscape() ? setTimeout(flushPending, 25) : null;
+  };
+  const onResize = () => tui.resize(process.stdout.columns || 80, process.stdout.rows || 24);
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.on("data", onInput);
+  process.stdout.on("resize", onResize);
+  try {
+    return await new Promise((resolve4) => {
+      tui.onExit(({ exitCode, signal }) => resolve4(exitCode ?? (signal === 2 ? 130 : 1)));
+    });
+  } finally {
+    if (pendingTimer) clearTimeout(pendingTimer);
+    flushPending();
+    const ended = inputDecoder.end();
+    if (ended.forwarded) {
+      try {
+        tui.write(ended.forwarded);
+      } catch {
+      }
+    }
+    process.stdin.off("data", onInput);
+    process.stdout.off("resize", onResize);
+    process.stdin.setRawMode(previousRawMode);
+    outputSubscription.dispose();
+  }
+}
 function cleanupOldCoiStateFiles(intercomDir, now = Date.now(), maxAgeMs = COI_STATE_MAX_AGE_MS) {
   let entries;
   try {
@@ -2436,14 +2820,14 @@ function cleanupOldCoiStateFiles(intercomDir, now = Date.now(), maxAgeMs = COI_S
 }
 async function runCoi(options) {
   if (hasCodexHelpOrVersion(options.codexArgs)) {
-    const help = spawn3(options.codexCommand, options.codexArgs, {
+    const help = spawn4(options.codexCommand, options.codexArgs, {
       cwd: options.cwd,
       env: process.env,
       stdio: "inherit"
     });
-    const [code2, signal2] = await once2(help, "exit");
-    if (typeof code2 === "number") return code2;
-    return signal2 === "SIGINT" ? 130 : 1;
+    const [code, signal] = await once2(help, "exit");
+    if (typeof code === "number") return code;
+    return signal === "SIGINT" ? 130 : 1;
   }
   ensureIntercomRuntimeDir();
   const identity = detectIdentity(options.cwd);
@@ -2454,7 +2838,7 @@ async function runCoi(options) {
   const socketPath = options.socketPath ?? join5(intercomDir, `coi-${process.pid}.sock`);
   const statePath = options.statePath ?? join5(intercomDir, `coi-${sanitizeSegment(id)}-state.json`);
   rmSync(socketPath, { force: true });
-  const appServer = spawn3(options.codexCommand, ["app-server", "--listen", `unix://${socketPath}`], {
+  const appServer = spawn4(options.codexCommand, buildCodexAppServerArgs(options.codexArgs, socketPath), {
     cwd: options.cwd,
     env: process.env,
     stdio: ["ignore", "ignore", "pipe"]
@@ -2511,15 +2895,38 @@ async function runCoi(options) {
   process.stderr.write(`coi sidecar thread: ${threadId}
 `);
   const resolvedTuiArgs = ["resume", "--remote", remote, ...optionArgs, threadId, ...promptArgs];
-  const tui = spawn3(options.codexCommand, resolvedTuiArgs, {
-    cwd: options.cwd,
-    env: process.env,
-    stdio: "inherit"
-  });
-  const [code, signal] = await once2(tui, "exit");
-  await cleanupOnce();
-  if (typeof code === "number") return code;
-  return signal === "SIGINT" ? 130 : 1;
+  let copying = false;
+  const copyCurrentContact = (controls) => {
+    if (copying) return;
+    copying = true;
+    void daemon.getContactTargetForAgent(id).then(async (contact) => {
+      const instruction = formatContactInstruction(contact);
+      const preferTerminal = Boolean(process.env.SSH_TTY || process.env.SSH_CONNECTION);
+      let copied = preferTerminal ? copyTextToTerminalClipboard(instruction, (sequence) => process.stdout.write(sequence)) : await copyTextToClipboard(instruction);
+      if (!copied.ok && process.stdout.isTTY) {
+        copied = copyTextToTerminalClipboard(instruction, (sequence) => process.stdout.write(sequence));
+      }
+      if (copied.ok) {
+        const fallback = contact.fallback ? " using the stable ID" : "";
+        terminalNotification(`Copied intercom contact${fallback}: ${contact.target}`);
+        return;
+      }
+      controls.insertText(instruction);
+      terminalNotification(`Clipboard unavailable; inserted intercom contact: ${contact.target}`);
+    }).catch((error) => terminalNotification(`Failed to read intercom contact: ${error instanceof Error ? error.message : String(error)}`)).finally(() => {
+      copying = false;
+    });
+  };
+  try {
+    return await runInteractiveTui(
+      options.codexCommand,
+      resolvedTuiArgs,
+      options.cwd,
+      options.copyShortcut ? copyCurrentContact : void 0
+    );
+  } finally {
+    await cleanupOnce();
+  }
 }
 async function main2() {
   const options = parseCoiArgs(process.argv.slice(2));
@@ -2534,6 +2941,7 @@ if (process.argv[1] && (basename2(process.argv[1]) === "coi.ts" || basename2(pro
   });
 }
 export {
+  buildCodexAppServerArgs,
   cleanupOldCoiStateFiles,
   createDefaultIdentity,
   deriveBridgeAgentRuntimeConfig,

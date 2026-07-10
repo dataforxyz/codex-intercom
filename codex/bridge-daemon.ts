@@ -7,6 +7,7 @@ import { IntercomClient } from "../broker/client.ts";
 import { spawnBrokerIfNeeded } from "../broker/spawn.ts";
 import { DEFAULT_ASK_TIMEOUT_MS, loadConfig, validateAskTimeoutMs } from "../config.ts";
 import type { Message, SessionInfo } from "../types.ts";
+import { resolveContactTarget, type IntercomContact } from "./contact.ts";
 import { formatAttachments, formatSessionList, resolveSessionTarget, type ToolResult } from "./runtime.ts";
 
 interface TurnWaiter {
@@ -268,6 +269,10 @@ export class VirtualCodexAgent {
 
   get id(): string {
     return this.agent.id;
+  }
+
+  async getContactTarget(): Promise<IntercomContact> {
+    return resolveContactTarget(this.agent.id, this.agent.name, () => this.client.listSessions());
   }
 
   ownsThread(threadId: string): boolean {
@@ -635,6 +640,12 @@ export class CodexBridgeDaemon {
     const agent = this.agents.find((candidate) => candidate.id === agentId);
     if (!agent) throw new Error(`No bridge agent registered with id: ${agentId}`);
     return agent.ensureThread();
+  }
+
+  async getContactTargetForAgent(agentId: string): Promise<IntercomContact> {
+    const agent = this.agents.find((candidate) => candidate.id === agentId);
+    if (!agent) throw new Error(`No bridge agent registered with id: ${agentId}`);
+    return agent.getContactTarget();
   }
 
   private async handleServerRequest(message: JsonRpcMessage): Promise<unknown> {

@@ -1483,6 +1483,36 @@ function loadConfig() {
   }
 }
 
+// codex/contact.ts
+function duplicateSessionNames(sessions) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const session of sessions) {
+    const name = session.name?.trim().toLowerCase();
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
+}
+function chooseContactTarget(currentSession, sessions) {
+  const duplicates = duplicateSessionNames(sessions);
+  const name = currentSession.name?.trim() || void 0;
+  const duplicateName = Boolean(name && duplicates.has(name.toLowerCase()));
+  return {
+    target: name && !duplicateName ? name : currentSession.id,
+    id: currentSession.id,
+    ...name ? { name } : {},
+    duplicateName
+  };
+}
+async function resolveContactTarget(id, name, listSessions) {
+  try {
+    const sessions = await listSessions();
+    const currentSession = sessions.find((session) => session.id === id);
+    if (currentSession) return chooseContactTarget(currentSession, sessions);
+  } catch {
+  }
+  return { target: id, id, ...name ? { name } : {}, duplicateName: false, fallback: true };
+}
+
 // codex/runtime.ts
 function formatAttachments(attachments) {
   if (!attachments?.length) return "";
@@ -1760,6 +1790,9 @@ var VirtualCodexAgent = class {
   }
   get id() {
     return this.agent.id;
+  }
+  async getContactTarget() {
+    return resolveContactTarget(this.agent.id, this.agent.name, () => this.client.listSessions());
   }
   ownsThread(threadId) {
     return this.threadId === threadId;
@@ -2103,6 +2136,11 @@ var CodexBridgeDaemon = class {
     const agent = this.agents.find((candidate) => candidate.id === agentId);
     if (!agent) throw new Error(`No bridge agent registered with id: ${agentId}`);
     return agent.ensureThread();
+  }
+  async getContactTargetForAgent(agentId) {
+    const agent = this.agents.find((candidate) => candidate.id === agentId);
+    if (!agent) throw new Error(`No bridge agent registered with id: ${agentId}`);
+    return agent.getContactTarget();
   }
   async handleServerRequest(message) {
     if (message.method === "mcpServer/elicitation/request" && isIntercomToolApprovalRequest(message.params)) {

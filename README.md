@@ -129,6 +129,19 @@ Everything not recognized as a sidecar flag is passed through to
 `codex resume --remote`, so normal Codex flags still work. Prompt arguments are
 placed after the resumed sidecar thread ID.
 
+While the `coi` TUI is open, press **Alt+I** to copy a short handoff snippet for
+the current intercom session. As in `pi-intercom`, the snippet uses the unique
+session name when possible and falls back to the stable intercom session ID.
+The shortcut is provided by the `coi` launcher; plain MCP-only Codex sessions do
+not have a plugin API for custom TUI actions.
+
+The shortcut uses native clipboard helpers locally and OSC 52 for SSH sessions.
+If clipboard access fails, `coi` inserts the snippet into the Codex composer.
+Disable the PTY-backed shortcut with `--no-intercom-shortcut` or
+`CODEX_INTERCOM_SHORTCUT=0`. The optional `node-pty` dependency is only loaded
+when the shortcut is enabled in an interactive terminal; if it is unavailable,
+`coi` launches the normal Codex TUI without the shortcut.
+
 `coi` also applies Codex runtime flags such as `--sandbox`,
 `--ask-for-approval`, and `--add-dir` to wake-triggered sidecar turns. For
 example, `coi --name worker-a --id worker-a --sandbox workspace-write` lets

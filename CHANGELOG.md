@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Added an `Alt+I` shortcut to `coi` that copies the current session's usable
+  intercom contact target.
+- Added terminal-protocol, OSC 52, editor insertion, and stable-ID fallbacks for
+  the shortcut, plus an opt-out flag for environments that do not want PTY
+  interception.
+
+### Changed
+- Made `node-pty` optional and clipboard helper execution asynchronous.
+
 ## [0.1.0] - 2026-07-03
 
 ### Added

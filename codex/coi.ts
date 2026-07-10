@@ -7,6 +7,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { CodexBridgeDaemon } from "./bridge-daemon.ts";
 import type { BridgeConfig } from "./bridge-config.ts";
 import { ensureIntercomRuntimeDir, getIntercomDirPath } from "../broker/paths.ts";
+import { copyTextToClipboard, copyTextToTerminalClipboard } from "./clipboard.ts";
+import { formatContactInstruction } from "./contact.ts";
+import { TuiInputDecoder } from "./tui-input.ts";
 
 export interface CoiOptions {
   id?: string;
@@ -16,6 +19,7 @@ export interface CoiOptions {
   socketPath?: string;
   statePath?: string;
   noTui: boolean;
+  copyShortcut: boolean;
   codexCommand: string;
   codexArgs: string[];
 }
@@ -36,6 +40,8 @@ const CODEX_OPTIONS_WITH_VALUE = new Set([
   "-a",
   "--ask-for-approval",
   "--add-dir",
+  "--disable",
+  "--enable",
   "-c",
   "--cd",
   "-C",
@@ -102,6 +108,14 @@ function readValue(args: string[], index: number, option: string): string {
     throw new Error(`${option} requires a value`);
   }
   return value;
+}
+
+function envFlagEnabled(value: string | undefined, defaultValue: boolean): boolean {
+  if (value === undefined) return defaultValue;
+  const normalized = value.trim().toLowerCase();
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  return defaultValue;
 }
 
 function camelSandboxType(mode: string): string {
@@ -226,6 +240,13 @@ export function parseCoiArgs(argv: string[], env: NodeJS.ProcessEnv = process.en
       case "--intercom-no-tui":
         options.noTui = true;
         break;
+      case "--no-intercom-shortcut":
+      case "--intercom-no-shortcut":
+        options.copyShortcut = false;
+        break;
+      case "--intercom-shortcut":
+        options.copyShortcut = true;
+        break;
       default:
         codexArgs.push(arg);
         break;
@@ -240,6 +261,7 @@ export function parseCoiArgs(argv: string[], env: NodeJS.ProcessEnv = process.en
     socketPath: options.socketPath,
     statePath: options.statePath,
     noTui: options.noTui ?? false,
+    copyShortcut: options.copyShortcut ?? envFlagEnabled(env.CODEX_INTERCOM_SHORTCUT, true),
     codexCommand: env.CODEX_INTERCOM_CODEX_COMMAND || "codex",
     codexArgs,
   };
@@ -271,6 +293,30 @@ export function splitCodexResumeArgs(args: string[]): { optionArgs: string[]; pr
   return { optionArgs, promptArgs };
 }
 
+export function buildCodexAppServerArgs(args: string[], socketPath: string): string[] {
+  const { optionArgs } = splitCodexResumeArgs(args);
+  const appServerArgs: string[] = [];
+
+  for (let index = 0; index < optionArgs.length; index += 1) {
+    const arg = optionArgs[index];
+    const optionName = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+    if (optionName === "--strict-config") {
+      appServerArgs.push(arg);
+      continue;
+    }
+    if (optionName !== "-c" && optionName !== "--config" && optionName !== "--enable" && optionName !== "--disable") {
+      continue;
+    }
+    appServerArgs.push(arg);
+    if (!arg.includes("=") && index + 1 < optionArgs.length) {
+      appServerArgs.push(optionArgs[index + 1]);
+      index += 1;
+    }
+  }
+
+  return ["app-server", ...appServerArgs, "--listen", `unix://${socketPath}`];
+}
+
 async function waitForSocket(socketPath: string, proc: ChildProcess, timeoutMs = 10000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -296,6 +342,101 @@ async function stopChild(proc: ChildProcess | null): Promise<void> {
     });
     proc.kill("SIGTERM");
   });
+}
+
+function terminalNotification(message: string): void {
+  const safe = message.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 200);
+  if (process.stdout.isTTY) process.stdout.write(`\x1b]9;${safe}\x1b\\`);
+  else process.stderr.write(`${safe}\n`);
+}
+
+async function runInteractiveTui(
+  command: string,
+  args: string[],
+  cwd: string,
+  onAltI?: (controls: { insertText(text: string): void }) => void,
+): Promise<number> {
+  const runInherited = async (): Promise<number> => {
+    const tui = spawn(command, args, { cwd, env: process.env, stdio: "inherit" });
+    const [code, signal] = await once(tui, "exit") as [number | null, NodeJS.Signals | null];
+    if (typeof code === "number") return code;
+    return signal === "SIGINT" ? 130 : 1;
+  };
+
+  if (!onAltI || !process.stdin.isTTY || !process.stdout.isTTY) {
+    return runInherited();
+  }
+
+  let nodePty: typeof import("node-pty");
+  try {
+    nodePty = await import("node-pty");
+  } catch (error) {
+    process.stderr.write(`coi: Alt+I unavailable because optional node-pty could not load: ${error instanceof Error ? error.message : String(error)}\n`);
+    return runInherited();
+  }
+
+  const tui = nodePty.spawn(command, args, {
+    name: process.env.TERM || "xterm-256color",
+    cols: process.stdout.columns || 80,
+    rows: process.stdout.rows || 24,
+    cwd,
+    env: process.env,
+  });
+  const outputSubscription = tui.onData((data) => process.stdout.write(data));
+  const previousRawMode = Boolean(process.stdin.isRaw);
+  const inputDecoder = new TuiInputDecoder();
+  let pendingTimer: NodeJS.Timeout | null = null;
+
+  const flushPending = () => {
+    const pending = inputDecoder.flushPendingEscape();
+    if (!pending) return;
+    try {
+      tui.write(pending);
+    } catch {
+      // The PTY may have closed while a partial escape sequence was buffered.
+    }
+    pendingTimer = null;
+  };
+  const onInput = (chunk: Buffer | string) => {
+    if (pendingTimer) clearTimeout(pendingTimer);
+    const filtered = inputDecoder.write(chunk);
+    if (filtered.forwarded) tui.write(filtered.forwarded);
+    const controls = {
+      insertText(text: string) {
+        const safe = text.replace(/\x1b/g, "");
+        tui.write(`\x1b[200~${safe}\x1b[201~`);
+      },
+    };
+    for (let index = 0; index < filtered.altICount; index += 1) onAltI(controls);
+    pendingTimer = inputDecoder.hasPendingEscape() ? setTimeout(flushPending, 25) : null;
+  };
+  const onResize = () => tui.resize(process.stdout.columns || 80, process.stdout.rows || 24);
+
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.on("data", onInput);
+  process.stdout.on("resize", onResize);
+
+  try {
+    return await new Promise<number>((resolve) => {
+      tui.onExit(({ exitCode, signal }) => resolve(exitCode ?? (signal === 2 ? 130 : 1)));
+    });
+  } finally {
+    if (pendingTimer) clearTimeout(pendingTimer);
+    flushPending();
+    const ended = inputDecoder.end();
+    if (ended.forwarded) {
+      try {
+        tui.write(ended.forwarded);
+      } catch {
+        // The PTY is already closed.
+      }
+    }
+    process.stdin.off("data", onInput);
+    process.stdout.off("resize", onResize);
+    process.stdin.setRawMode(previousRawMode);
+    outputSubscription.dispose();
+  }
 }
 
 export function cleanupOldCoiStateFiles(intercomDir: string, now = Date.now(), maxAgeMs = COI_STATE_MAX_AGE_MS): void {
@@ -340,7 +481,7 @@ export async function runCoi(options: CoiOptions): Promise<number> {
   const statePath = options.statePath ?? join(intercomDir, `coi-${sanitizeSegment(id)}-state.json`);
   rmSync(socketPath, { force: true });
 
-  const appServer = spawn(options.codexCommand, ["app-server", "--listen", `unix://${socketPath}`], {
+  const appServer = spawn(options.codexCommand, buildCodexAppServerArgs(options.codexArgs, socketPath), {
     cwd: options.cwd,
     env: process.env,
     stdio: ["ignore", "ignore", "pipe"],
@@ -402,15 +543,45 @@ export async function runCoi(options: CoiOptions): Promise<number> {
   const { optionArgs, promptArgs } = splitCodexResumeArgs(options.codexArgs);
   process.stderr.write(`coi sidecar thread: ${threadId}\n`);
   const resolvedTuiArgs = ["resume", "--remote", remote, ...optionArgs, threadId, ...promptArgs];
-  const tui = spawn(options.codexCommand, resolvedTuiArgs, {
-    cwd: options.cwd,
-    env: process.env,
-    stdio: "inherit",
-  });
-  const [code, signal] = await once(tui, "exit") as [number | null, NodeJS.Signals | null];
-  await cleanupOnce();
-  if (typeof code === "number") return code;
-  return signal === "SIGINT" ? 130 : 1;
+  let copying = false;
+  const copyCurrentContact = (controls: { insertText(text: string): void }) => {
+    if (copying) return;
+    copying = true;
+    void daemon!.getContactTargetForAgent(id)
+      .then(async (contact) => {
+        const instruction = formatContactInstruction(contact);
+        const preferTerminal = Boolean(process.env.SSH_TTY || process.env.SSH_CONNECTION);
+        let copied = preferTerminal
+          ? copyTextToTerminalClipboard(instruction, (sequence) => process.stdout.write(sequence))
+          : await copyTextToClipboard(instruction);
+        if (!copied.ok && process.stdout.isTTY) {
+          copied = copyTextToTerminalClipboard(instruction, (sequence) => process.stdout.write(sequence));
+        }
+
+        if (copied.ok) {
+          const fallback = contact.fallback ? " using the stable ID" : "";
+          terminalNotification(`Copied intercom contact${fallback}: ${contact.target}`);
+          return;
+        }
+
+        controls.insertText(instruction);
+        terminalNotification(`Clipboard unavailable; inserted intercom contact: ${contact.target}`);
+      })
+      .catch((error) => terminalNotification(`Failed to read intercom contact: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => {
+        copying = false;
+      });
+  };
+  try {
+    return await runInteractiveTui(
+      options.codexCommand,
+      resolvedTuiArgs,
+      options.cwd,
+      options.copyShortcut ? copyCurrentContact : undefined,
+    );
+  } finally {
+    await cleanupOnce();
+  }
 }
 
 async function main(): Promise<void> {
