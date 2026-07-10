@@ -365,6 +365,7 @@ async function runInteractiveTui(
   args: string[],
   cwd: string,
   onAltI?: (controls: { insertText(text: string): void }) => void,
+  onAltM?: (controls: { insertText(text: string): void }) => void,
 ): Promise<number> {
   const runInherited = async (): Promise<number> => {
     const tui = spawn(command, args, { cwd, env: process.env, stdio: "inherit" });
@@ -373,7 +374,7 @@ async function runInteractiveTui(
     return signal === "SIGINT" ? 130 : 1;
   };
 
-  if (!onAltI || !process.stdin.isTTY || !process.stdout.isTTY) {
+  if ((!onAltI && !onAltM) || !process.stdin.isTTY || !process.stdout.isTTY) {
     return runInherited();
   }
 
@@ -417,7 +418,8 @@ async function runInteractiveTui(
         tui.write(`\x1b[200~${safe}\x1b[201~`);
       },
     };
-    for (let index = 0; index < filtered.altICount; index += 1) onAltI(controls);
+    for (let index = 0; index < filtered.altICount; index += 1) onAltI?.(controls);
+    for (let index = 0; index < filtered.altMCount; index += 1) onAltM?.(controls);
     pendingTimer = inputDecoder.hasPendingEscape() ? setTimeout(flushPending, 25) : null;
   };
   const onResize = () => tui.resize(process.stdout.columns || 80, process.stdout.rows || 24);
@@ -584,12 +586,17 @@ export async function runCoi(options: CoiOptions): Promise<number> {
         copying = false;
       });
   };
+  const openIntercom = (controls: { insertText(text: string): void }) => {
+    controls.insertText("Use intercom_list to show the active sessions, then ask me which session to message and what to send. Use intercom_send after I choose.");
+    terminalNotification("Inserted intercom session picker request");
+  };
   try {
     return await runInteractiveTui(
       options.codexCommand,
       resolvedTuiArgs,
       options.cwd,
       options.copyShortcut ? copyCurrentContact : undefined,
+      options.copyShortcut ? openIntercom : undefined,
     );
   } finally {
     await cleanupOnce();

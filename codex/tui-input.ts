@@ -5,11 +5,13 @@ const ALT_MODIFIER_BIT = 0b10;
 const LOCK_MODIFIER_BITS = 0b1100_0000;
 const DISALLOWED_MODIFIER_BITS = 0b0011_1101;
 const KEY_I = 105;
+const KEY_M = 109;
 
 export interface FilteredTuiInput {
   forwarded: string;
   pending: string;
   altICount: number;
+  altMCount: number;
 }
 
 interface ShortcutMatch {
@@ -30,7 +32,7 @@ function isAltOnlyModifier(encodedModifier: number): boolean {
     && (bits & ~(ALT_MODIFIER_BIT | LOCK_MODIFIER_BITS)) === 0;
 }
 
-function matchKittyAltI(sequence: string): ShortcutMatch {
+function matchKittyAltKey(sequence: string, key: number): ShortcutMatch {
   if (!sequence.endsWith("u")) return { consume: false, trigger: false };
   const params = sequence.slice(2, -1).split(";");
   if (params.length < 2) return { consume: false, trigger: false };
@@ -45,7 +47,7 @@ function matchKittyAltI(sequence: string): ShortcutMatch {
     return { consume: false, trigger: false };
   }
 
-  if (primaryKey !== KEY_I && baseLayoutKey !== KEY_I) {
+  if (primaryKey !== key && baseLayoutKey !== key) {
     return { consume: false, trigger: false };
   }
 
@@ -53,21 +55,21 @@ function matchKittyAltI(sequence: string): ShortcutMatch {
   return { consume: true, trigger: eventType === 1 };
 }
 
-function matchModifyOtherKeysAltI(sequence: string): ShortcutMatch {
+function matchModifyOtherKeysAltKey(sequence: string, expectedKey: number): ShortcutMatch {
   if (!sequence.endsWith("~")) return { consume: false, trigger: false };
   const params = sequence.slice(2, -1).split(";");
   if (params.length !== 3 || params[0] !== "27") return { consume: false, trigger: false };
   const modifier = parseNumber(params[1]);
   const key = parseNumber(params[2]);
-  const matches = modifier !== null && key === KEY_I && isAltOnlyModifier(modifier);
+  const matches = modifier !== null && key === expectedKey && isAltOnlyModifier(modifier);
   return { consume: matches, trigger: matches };
 }
 
-function matchAltISequence(sequence: string): ShortcutMatch {
-  if (sequence === `${ESC}i`) return { consume: true, trigger: true };
+function matchAltKeySequence(sequence: string, key: number): ShortcutMatch {
+  if (sequence === `${ESC}${String.fromCharCode(key)}`) return { consume: true, trigger: true };
   if (!sequence.startsWith(`${ESC}[`)) return { consume: false, trigger: false };
-  if (sequence.endsWith("u")) return matchKittyAltI(sequence);
-  if (sequence.endsWith("~")) return matchModifyOtherKeysAltI(sequence);
+  if (sequence.endsWith("u")) return matchKittyAltKey(sequence, key);
+  if (sequence.endsWith("~")) return matchModifyOtherKeysAltKey(sequence, key);
   return { consume: false, trigger: false };
 }
 
@@ -87,6 +89,7 @@ export function filterAltIInput(input: string, pending = ""): FilteredTuiInput {
   const source = pending + input;
   let forwarded = "";
   let altICount = 0;
+  let altMCount = 0;
   let index = 0;
 
   while (index < source.length) {
@@ -97,11 +100,16 @@ export function filterAltIInput(input: string, pending = ""): FilteredTuiInput {
     }
 
     if (index + 1 >= source.length) {
-      return { forwarded, pending: source.slice(index), altICount };
+      return { forwarded, pending: source.slice(index), altICount, altMCount };
     }
 
     if (source[index + 1] === "i") {
       altICount += 1;
+      index += 2;
+      continue;
+    }
+    if (source[index + 1] === "m") {
+      altMCount += 1;
       index += 2;
       continue;
     }
@@ -114,20 +122,22 @@ export function filterAltIInput(input: string, pending = ""): FilteredTuiInput {
 
     const end = findCsiEnd(source, index);
     if (end === -1) {
-      return { forwarded, pending: source.slice(index), altICount };
+      return { forwarded, pending: source.slice(index), altICount, altMCount };
     }
 
     const sequence = source.slice(index, end + 1);
-    const match = matchAltISequence(sequence);
-    if (match.consume) {
-      if (match.trigger) altICount += 1;
+    const altI = matchAltKeySequence(sequence, KEY_I);
+    const altM = matchAltKeySequence(sequence, KEY_M);
+    if (altI.consume || altM.consume) {
+      if (altI.trigger) altICount += 1;
+      if (altM.trigger) altMCount += 1;
     } else {
       forwarded += sequence;
     }
     index = end + 1;
   }
 
-  return { forwarded, pending: "", altICount };
+  return { forwarded, pending: "", altICount, altMCount };
 }
 
 /** UTF-8-safe stateful wrapper for terminal chunks and partial escape sequences. */
@@ -139,7 +149,7 @@ export class TuiInputDecoder {
     const text = typeof chunk === "string" ? chunk : this.utf8.write(chunk);
     const filtered = filterAltIInput(text, this.pending);
     this.pending = filtered.pending;
-    return { forwarded: filtered.forwarded, altICount: filtered.altICount };
+    return { forwarded: filtered.forwarded, altICount: filtered.altICount, altMCount: filtered.altMCount };
   }
 
   hasPendingEscape(): boolean {
@@ -158,6 +168,7 @@ export class TuiInputDecoder {
     return {
       forwarded: filtered.forwarded + filtered.pending,
       altICount: filtered.altICount,
+      altMCount: filtered.altMCount,
     };
   }
 }

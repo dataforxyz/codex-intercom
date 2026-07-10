@@ -2704,6 +2704,7 @@ var ALT_MODIFIER_BIT = 2;
 var LOCK_MODIFIER_BITS = 192;
 var DISALLOWED_MODIFIER_BITS = 61;
 var KEY_I = 105;
+var KEY_M = 109;
 function parseNumber(value) {
   if (!value || !/^\d+$/.test(value)) return null;
   const parsed = Number(value);
@@ -2714,7 +2715,7 @@ function isAltOnlyModifier(encodedModifier) {
   if (bits < 0 || (bits & ALT_MODIFIER_BIT) === 0) return false;
   return (bits & DISALLOWED_MODIFIER_BITS) === 0 && (bits & ~(ALT_MODIFIER_BIT | LOCK_MODIFIER_BITS)) === 0;
 }
-function matchKittyAltI(sequence) {
+function matchKittyAltKey(sequence, key) {
   if (!sequence.endsWith("u")) return { consume: false, trigger: false };
   const params = sequence.slice(2, -1).split(";");
   if (params.length < 2) return { consume: false, trigger: false };
@@ -2727,25 +2728,25 @@ function matchKittyAltI(sequence) {
   if (modifier === null || eventType === null || !isAltOnlyModifier(modifier)) {
     return { consume: false, trigger: false };
   }
-  if (primaryKey !== KEY_I && baseLayoutKey !== KEY_I) {
+  if (primaryKey !== key && baseLayoutKey !== key) {
     return { consume: false, trigger: false };
   }
   return { consume: true, trigger: eventType === 1 };
 }
-function matchModifyOtherKeysAltI(sequence) {
+function matchModifyOtherKeysAltKey(sequence, expectedKey) {
   if (!sequence.endsWith("~")) return { consume: false, trigger: false };
   const params = sequence.slice(2, -1).split(";");
   if (params.length !== 3 || params[0] !== "27") return { consume: false, trigger: false };
   const modifier = parseNumber(params[1]);
   const key = parseNumber(params[2]);
-  const matches = modifier !== null && key === KEY_I && isAltOnlyModifier(modifier);
+  const matches = modifier !== null && key === expectedKey && isAltOnlyModifier(modifier);
   return { consume: matches, trigger: matches };
 }
-function matchAltISequence(sequence) {
-  if (sequence === `${ESC}i`) return { consume: true, trigger: true };
+function matchAltKeySequence(sequence, key) {
+  if (sequence === `${ESC}${String.fromCharCode(key)}`) return { consume: true, trigger: true };
   if (!sequence.startsWith(`${ESC}[`)) return { consume: false, trigger: false };
-  if (sequence.endsWith("u")) return matchKittyAltI(sequence);
-  if (sequence.endsWith("~")) return matchModifyOtherKeysAltI(sequence);
+  if (sequence.endsWith("u")) return matchKittyAltKey(sequence, key);
+  if (sequence.endsWith("~")) return matchModifyOtherKeysAltKey(sequence, key);
   return { consume: false, trigger: false };
 }
 function findCsiEnd(source, start) {
@@ -2759,6 +2760,7 @@ function filterAltIInput(input, pending = "") {
   const source = pending + input;
   let forwarded = "";
   let altICount = 0;
+  let altMCount = 0;
   let index = 0;
   while (index < source.length) {
     if (source[index] !== ESC) {
@@ -2767,10 +2769,15 @@ function filterAltIInput(input, pending = "") {
       continue;
     }
     if (index + 1 >= source.length) {
-      return { forwarded, pending: source.slice(index), altICount };
+      return { forwarded, pending: source.slice(index), altICount, altMCount };
     }
     if (source[index + 1] === "i") {
       altICount += 1;
+      index += 2;
+      continue;
+    }
+    if (source[index + 1] === "m") {
+      altMCount += 1;
       index += 2;
       continue;
     }
@@ -2781,18 +2788,20 @@ function filterAltIInput(input, pending = "") {
     }
     const end = findCsiEnd(source, index);
     if (end === -1) {
-      return { forwarded, pending: source.slice(index), altICount };
+      return { forwarded, pending: source.slice(index), altICount, altMCount };
     }
     const sequence = source.slice(index, end + 1);
-    const match = matchAltISequence(sequence);
-    if (match.consume) {
-      if (match.trigger) altICount += 1;
+    const altI = matchAltKeySequence(sequence, KEY_I);
+    const altM = matchAltKeySequence(sequence, KEY_M);
+    if (altI.consume || altM.consume) {
+      if (altI.trigger) altICount += 1;
+      if (altM.trigger) altMCount += 1;
     } else {
       forwarded += sequence;
     }
     index = end + 1;
   }
-  return { forwarded, pending: "", altICount };
+  return { forwarded, pending: "", altICount, altMCount };
 }
 var TuiInputDecoder = class {
   utf8 = new StringDecoder("utf8");
@@ -2801,7 +2810,7 @@ var TuiInputDecoder = class {
     const text = typeof chunk === "string" ? chunk : this.utf8.write(chunk);
     const filtered = filterAltIInput(text, this.pending);
     this.pending = filtered.pending;
-    return { forwarded: filtered.forwarded, altICount: filtered.altICount };
+    return { forwarded: filtered.forwarded, altICount: filtered.altICount, altMCount: filtered.altMCount };
   }
   hasPendingEscape() {
     return this.pending.length > 0;
@@ -2816,7 +2825,8 @@ var TuiInputDecoder = class {
     this.pending = "";
     return {
       forwarded: filtered.forwarded + filtered.pending,
-      altICount: filtered.altICount
+      altICount: filtered.altICount,
+      altMCount: filtered.altMCount
     };
   }
 };
@@ -3106,14 +3116,14 @@ function terminalNotification(message) {
   else process.stderr.write(`${safe}
 `);
 }
-async function runInteractiveTui(command, args, cwd, onAltI) {
+async function runInteractiveTui(command, args, cwd, onAltI, onAltM) {
   const runInherited = async () => {
     const tui2 = spawn4(command, args, { cwd, env: process.env, stdio: "inherit" });
     const [code, signal] = await once2(tui2, "exit");
     if (typeof code === "number") return code;
     return signal === "SIGINT" ? 130 : 1;
   };
-  if (!onAltI || !process.stdin.isTTY || !process.stdout.isTTY) {
+  if (!onAltI && !onAltM || !process.stdin.isTTY || !process.stdout.isTTY) {
     return runInherited();
   }
   let nodePty;
@@ -3154,7 +3164,8 @@ async function runInteractiveTui(command, args, cwd, onAltI) {
         tui.write(`\x1B[200~${safe}\x1B[201~`);
       }
     };
-    for (let index = 0; index < filtered.altICount; index += 1) onAltI(controls);
+    for (let index = 0; index < filtered.altICount; index += 1) onAltI?.(controls);
+    for (let index = 0; index < filtered.altMCount; index += 1) onAltM?.(controls);
     pendingTimer = inputDecoder.hasPendingEscape() ? setTimeout(flushPending, 25) : null;
   };
   const onResize = () => tui.resize(process.stdout.columns || 80, process.stdout.rows || 24);
@@ -3300,12 +3311,17 @@ async function runCoi(options) {
       copying = false;
     });
   };
+  const openIntercom = (controls) => {
+    controls.insertText("Use intercom_list to show the active sessions, then ask me which session to message and what to send. Use intercom_send after I choose.");
+    terminalNotification("Inserted intercom session picker request");
+  };
   try {
     return await runInteractiveTui(
       options.codexCommand,
       resolvedTuiArgs,
       options.cwd,
-      options.copyShortcut ? copyCurrentContact : void 0
+      options.copyShortcut ? copyCurrentContact : void 0,
+      options.copyShortcut ? openIntercom : void 0
     );
   } finally {
     await cleanupOnce();

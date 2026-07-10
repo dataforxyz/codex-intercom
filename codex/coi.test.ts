@@ -100,11 +100,13 @@ test("filterAltIInput removes legacy and enhanced Alt+I press encodings", () => 
     forwarded: "beforeafter!",
     pending: "",
     altICount: 2,
+    altMCount: 0,
   });
   assert.deepEqual(filterAltIInput("\x1b[27;3;105~"), {
     forwarded: "",
     pending: "",
     altICount: 1,
+    altMCount: 0,
   });
 });
 
@@ -113,6 +115,7 @@ test("filterAltIInput consumes repeat and release events without retriggering", 
     forwarded: "",
     pending: "",
     altICount: 1,
+    altMCount: 0,
   });
 });
 
@@ -121,6 +124,7 @@ test("filterAltIInput accepts lock modifiers and alternate keyboard layouts", ()
     forwarded: "",
     pending: "",
     altICount: 2,
+    altMCount: 0,
   });
 });
 
@@ -130,16 +134,18 @@ test("filterAltIInput preserves Alt+Shift+I and other modified keys", () => {
     forwarded: input,
     pending: "",
     altICount: 0,
+    altMCount: 0,
   });
 });
 
 test("filterAltIInput carries split escape sequences between chunks", () => {
   const first = filterAltIInput("hello\x1b[105;");
-  assert.deepEqual(first, { forwarded: "hello", pending: "\x1b[105;", altICount: 0 });
+  assert.deepEqual(first, { forwarded: "hello", pending: "\x1b[105;", altICount: 0, altMCount: 0 });
   assert.deepEqual(filterAltIInput("3:1uworld", first.pending), {
     forwarded: "world",
     pending: "",
     altICount: 1,
+    altMCount: 0,
   });
 });
 
@@ -148,6 +154,16 @@ test("filterAltIInput preserves unrelated terminal escape sequences", () => {
     forwarded: "\x1b[A\x1b[200~paste\x1b[201~",
     pending: "",
     altICount: 0,
+    altMCount: 0,
+  });
+});
+
+test("filterAltIInput also extracts Alt+M intercom shortcut encodings", () => {
+  assert.deepEqual(filterAltIInput("before\x1bmafter\x1b[109;3:1u"), {
+    forwarded: "beforeafter",
+    pending: "",
+    altICount: 0,
+    altMCount: 2,
   });
 });
 
@@ -163,9 +179,9 @@ test("TuiInputDecoder preserves UTF-8 split across terminal chunks", () => {
 
 test("TuiInputDecoder carries and flushes partial escape sequences", () => {
   const decoder = new TuiInputDecoder();
-  assert.deepEqual(decoder.write(Buffer.from("hello\x1b[105;")), { forwarded: "hello", altICount: 0 });
+  assert.deepEqual(decoder.write(Buffer.from("hello\x1b[105;")), { forwarded: "hello", altICount: 0, altMCount: 0 });
   assert.equal(decoder.hasPendingEscape(), true);
-  assert.deepEqual(decoder.write(Buffer.from("3:1u")), { forwarded: "", altICount: 1 });
+  assert.deepEqual(decoder.write(Buffer.from("3:1u")), { forwarded: "", altICount: 1, altMCount: 0 });
   assert.equal(decoder.hasPendingEscape(), false);
   decoder.write(Buffer.from("\x1b"));
   assert.equal(decoder.flushPendingEscape(), "\x1b");

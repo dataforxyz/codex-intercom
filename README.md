@@ -136,7 +136,7 @@ alias codex-intercom='coi'
 Then run `codex-intercom --name worker-a --id worker-a`. The alias is optional;
 the important part is launching through `coi`, because the wrapper owns the
 app-server sidecar that wakes on incoming work and the terminal integration
-that provides **Alt+I**. Starting `codex` directly with only the MCP server
+that provides **Alt+I** and **Alt+M**. Starting `codex` directly with only the MCP server
 still provides intercom tools, but not those host-level behaviors.
 
 Useful flags:
@@ -156,6 +156,19 @@ the current intercom session. As in `pi-intercom`, the snippet uses the unique
 session name when possible and falls back to the stable intercom session ID.
 The shortcut is provided by the `coi` launcher; plain MCP-only Codex sessions do
 not have a plugin API for custom TUI actions.
+
+Press **Alt+M** to insert the Codex intercom session-picker request. Codex will
+call `intercom_list`, show the available sessions, ask which peer and message
+you want, then use `intercom_send`. Codex does not expose native slash-command
+or overlay registration, so `coi` provides this assisted flow instead of
+claiming a native `/intercom` command. The equivalent MCP tools remain
+available directly in every Codex session.
+
+| Action | Codex surface |
+|---|---|
+| Choose a session and send | **Alt+M** in `coi` |
+| Copy this session's contact target | **Alt+I** in `coi` |
+| Script or ask directly | `intercom_list`, `intercom_send`, `intercom_ask` |
 
 The shortcut uses native clipboard helpers locally and OSC 52 for SSH sessions.
 If clipboard access fails, `coi` inserts the snippet into the Codex composer.
