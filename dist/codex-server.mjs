@@ -867,6 +867,11 @@ var BROKER_SPAWN_LOCK = join3(INTERCOM_DIR, "broker.spawn.lock");
 function sleep(ms) {
   return new Promise((resolve3) => setTimeout(resolve3, ms));
 }
+function getBrokerEntryPath(moduleUrl = import.meta.url) {
+  const moduleDir = dirname2(fileURLToPath(moduleUrl));
+  const bundledBroker = join3(moduleDir, "broker.mjs");
+  return existsSync2(bundledBroker) ? bundledBroker : join3(moduleDir, "broker.ts");
+}
 function getTsxCliPath(extensionDir = EXTENSION_DIR) {
   try {
     const requireFromExtension = createRequire(import.meta.url);
@@ -968,7 +973,7 @@ async function spawnBrokerIfNeeded(brokerCommand, brokerArgs) {
     if (await checkBrokerHealth() === "incompatible") {
       await stopBrokerProcess();
     }
-    const brokerPath = join3(dirname2(fileURLToPath(import.meta.url)), "broker.ts");
+    const brokerPath = getBrokerEntryPath();
     const launch = getBrokerLaunchSpec(brokerPath, brokerCommand, brokerArgs);
     if (launch.kind === "windows-launcher") {
       writeWindowsHiddenLauncher(launch.launcherCommandLine, launch.launcherPath);
