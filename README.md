@@ -318,7 +318,7 @@ Or point an alias directly at the checkout:
 ```bash
 cim() {
   local home="${CODEX_MIN_HOME:-$HOME/.codex-min-intercom}"
-  local repo="${CODEX_INTERCOM_REPO:-/absolute/path/to/codex-intercom}"
+  local repo="${CODEX_INTERCOM_REPO:-/absolute/path/to/agent-intercom-codex}"
   local yolo="${CODEX_YOLO:-1}"
   case "${1:-}" in
     yolo|--yolo|on) shift; yolo=1 ;;
