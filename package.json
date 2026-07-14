@@ -2,7 +2,7 @@
   "name": "codex-intercom",
   "version": "0.2.0",
   "description": "Codex MCP plugin for direct local messaging with Pi and Codex coding-agent sessions.",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -30,7 +30,10 @@
     ".codex-plugin/**/*",
     ".mcp.json",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "licenses/**/*",
+    "COPYRIGHT"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",

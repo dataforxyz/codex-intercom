@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed
+- Changed the current project license to `AGPL-3.0-or-later`. Previously published MIT versions remain under MIT, and original `pi-intercom` notices are preserved in `THIRD_PARTY_NOTICES.md`.
+
 ### Added
 - Added protocol v3 delivery acknowledgements, explicit ask-control
   confirmations, and a durable sender outbox that replays safely after broker
