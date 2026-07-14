@@ -13,6 +13,7 @@
 | Codex | [`agent-intercom-codex`](https://github.com/dataforxyz/agent-intercom-codex) |
 | Claude Code | [`agent-intercom-claude`](https://github.com/dataforxyz/agent-intercom-claude) |
 | OpenCode | [`agent-intercom-opencode`](https://github.com/dataforxyz/agent-intercom-opencode) |
+| Fleet lifecycle | [`agent-intercom-orchestrator`](https://github.com/dataforxyz/agent-intercom-orchestrator) |
 
 ## Origin and thanks
 
@@ -89,6 +90,15 @@ codex mcp add codex-planner \
 Per-command environment variables passed to `codex exec` are not forwarded into
 the MCP server process. Configure identity on the MCP server entry when you need
 stable names or IDs.
+
+To let a Pi manager create Codex workers with owned systemd cgroups, leases, model/effort selection, logs, and verified cleanup, install the companion Pi packages:
+
+```bash
+pi install git:github.com/dataforxyz/agent-intercom-pi
+pi install git:github.com/dataforxyz/agent-intercom-orchestrator
+```
+
+Restart Pi or run `/reload`, then call `agent_fleet({ action: "doctor" })`. The orchestrator invokes the installed `coi` command, or a separately configured minimal wrapper such as `coim`; it does not replace this Codex adapter.
 
 ## Plugin Use
 
