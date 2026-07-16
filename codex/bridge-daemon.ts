@@ -9,6 +9,7 @@ import { DEFAULT_ASK_TIMEOUT_MS, loadConfig, validateAskTimeoutMs } from "../con
 import type { Message, SessionInfo } from "../types.ts";
 import { resolveContactTarget, type IntercomContact } from "./contact.ts";
 import { formatAttachments, formatSessionList, resolveSessionTarget, type ToolResult } from "./runtime.ts";
+import { formatIntercomTeam, resolveIntercomTeam } from "./team.ts";
 
 interface TurnWaiter {
   from: SessionInfo;
@@ -37,6 +38,7 @@ export interface CodexBridgeHooks {
 
 const APPROVED_INTERCOM_TOOLS = new Set([
   "intercom_whoami",
+  "intercom_team",
   "intercom_status",
   "intercom_list",
   "intercom_set_summary",
@@ -512,6 +514,11 @@ export class VirtualCodexAgent {
           `session_id: ${this.agent.id}\nname: ${this.agent.name}\ncwd: ${this.agent.cwd}`,
           { session_id: this.agent.id, name: this.agent.name, cwd: this.agent.cwd, model: this.agent.model ?? "codex-app-server" },
         );
+      case "intercom_team": {
+        const sessions = await this.client.listSessions();
+        const team = await resolveIntercomTeam({ selfId: this.agent.id, sessions });
+        return textToolResult(formatIntercomTeam(team), team as unknown as Record<string, unknown>);
+      }
       case "intercom_status": {
         const sessions = await this.client.listSessions();
         return textToolResult(

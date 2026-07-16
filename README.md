@@ -117,8 +117,9 @@ intercom tools.
 ## Tools
 
 - `intercom_whoami`: show this session's intercom ID, name, cwd, and model.
+- `intercom_team`: show the current manager and live coworkers owned by that manager.
 - `intercom_status`: show connection status and pending message counts.
-- `intercom_list`: list local Pi, Codex, Claude Code, and OpenCode sessions.
+- `intercom_list`: list local Pi, Codex, Claude Code, and OpenCode sessions globally.
 - `intercom_set_summary`: publish a short discoverable status.
 - `intercom_send`: send a non-blocking message.
 - `intercom_ask`: send a question and wait for the target's reply.
@@ -128,7 +129,10 @@ intercom tools.
 Example:
 
 ```typescript
-intercom_list({ scope: "machine" })
+intercom_team({})
+// Manager: manager-id [connected]
+// You: worker-a
+// Coworkers: reviewer target=reviewer (claude, challenger, running) [connected]
 
 intercom_ask({
   to: "worker-a",
@@ -194,6 +198,7 @@ available directly in every Codex session.
 |---|---|
 | Choose a session and send | **Alt+M** in `coi` |
 | Copy this session's contact target | **Alt+I** in `coi` |
+| Find an orchestrator-owned manager or coworker | `intercom_team` |
 | Script or ask directly | `intercom_list`, `intercom_send`, `intercom_ask` |
 
 The shortcut uses native clipboard helpers locally and OSC 52 for SSH sessions.

@@ -5,7 +5,7 @@ import { once as once2 } from "node:events";
 import { spawn as spawn4, spawnSync as spawnSync2 } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
 import { existsSync as existsSync5, readdirSync, rmSync, statSync } from "node:fs";
-import { basename as basename2, join as join6, resolve as resolve4 } from "node:path";
+import { basename as basename2, join as join7, resolve as resolve4 } from "node:path";
 import { setTimeout as delay2 } from "node:timers/promises";
 
 // codex/bridge-daemon.ts
@@ -1898,6 +1898,52 @@ async function resolveContactTarget(id, name, listSessions) {
   return { target: id, id, ...name ? { name } : {}, duplicateName: false, fallback: true };
 }
 
+// codex/team.ts
+import { readFile } from "node:fs/promises";
+import { join as join6 } from "node:path";
+var LIVE_STATES = /* @__PURE__ */ new Set(["provisioning", "running", "idle", "needs_attention", "stopping"]);
+var stringValue = (value) => typeof value === "string" && value.trim() ? value.trim() : void 0;
+var connectedTo = (sessions, target) => {
+  const normalized = target.toLowerCase();
+  return sessions.some((session) => session.id === target || session.name?.toLowerCase() === normalized);
+};
+async function readWorkers(agentDir) {
+  try {
+    const parsed = JSON.parse(await readFile(join6(agentDir, "intercom", "orchestrator", "workers.json"), "utf8"));
+    return Array.isArray(parsed.workers) ? parsed.workers : [];
+  } catch {
+    return [];
+  }
+}
+async function resolveIntercomTeam(input) {
+  const env = input.env ?? process.env;
+  const workers = await readWorkers(input.agentDir ?? getAgentDirPath());
+  const workerId = stringValue(env.AGENT_INTERCOM_WORKER_ID);
+  const runId = stringValue(env.AGENT_INTERCOM_RUN_ID);
+  const current = workerId ? workers.find((worker) => stringValue(worker.id) === workerId && (!runId || stringValue(worker.runId) === runId)) : void 0;
+  const managerTarget = stringValue(current?.managerSessionId) ?? stringValue(env.AGENT_INTERCOM_MANAGER_TARGET) ?? stringValue(env.AGENT_INTERCOM_MANAGER_SESSION_ID);
+  const teamId = managerTarget ?? input.selfId;
+  const coworkers = workers.filter((worker) => worker.owned === true).filter((worker) => stringValue(worker.managerSessionId) === teamId).filter((worker) => LIVE_STATES.has(stringValue(worker.state) ?? "")).filter((worker) => stringValue(worker.id) !== workerId).map((worker) => {
+    const id = stringValue(worker.id);
+    if (!id) return void 0;
+    const target = stringValue(worker.intercomTarget) ?? id;
+    return { id, target, ...stringValue(worker.harness) ? { harness: stringValue(worker.harness) } : {}, ...stringValue(worker.role) ? { role: stringValue(worker.role) } : {}, ...stringValue(worker.state) ? { state: stringValue(worker.state) } : {}, connected: connectedTo(input.sessions, target) };
+  }).filter((member) => Boolean(member));
+  return { teamId, self: { id: input.selfId, ...workerId ? { workerId } : {}, isManager: !managerTarget }, manager: managerTarget ? { target: managerTarget, connected: connectedTo(input.sessions, managerTarget) } : { target: input.selfId, connected: true }, coworkers };
+}
+function formatIntercomTeam(team) {
+  const lines = [`Manager: ${team.manager ? `${team.manager.target} [${team.manager.connected ? "connected" : "not connected"}]` : "unknown"}`, `You: ${team.self.id}${team.self.isManager ? " [manager]" : ""}`];
+  if (!team.coworkers.length) lines.push("Coworkers: none");
+  else {
+    lines.push("Coworkers:");
+    for (const coworker of team.coworkers) {
+      const metadata = [coworker.harness, coworker.role, coworker.state].filter(Boolean).join(", ");
+      lines.push(`- ${coworker.id} target=${coworker.target}${metadata ? ` (${metadata})` : ""} [${coworker.connected ? "connected" : "not connected"}]`);
+    }
+  }
+  return lines.join("\n");
+}
+
 // codex/runtime.ts
 function formatAttachments(attachments) {
   if (!attachments?.length) return "";
@@ -1952,6 +1998,7 @@ function formatSessionList(sessions, currentSessionId, currentCwd) {
 // codex/bridge-daemon.ts
 var APPROVED_INTERCOM_TOOLS = /* @__PURE__ */ new Set([
   "intercom_whoami",
+  "intercom_team",
   "intercom_status",
   "intercom_list",
   "intercom_set_summary",
@@ -2387,6 +2434,11 @@ name: ${this.agent.name}
 cwd: ${this.agent.cwd}`,
           { session_id: this.agent.id, name: this.agent.name, cwd: this.agent.cwd, model: this.agent.model ?? "codex-app-server" }
         );
+      case "intercom_team": {
+        const sessions = await this.client.listSessions();
+        const team = await resolveIntercomTeam({ selfId: this.agent.id, sessions });
+        return textToolResult(formatIntercomTeam(team), team);
+      }
       case "intercom_status": {
         const sessions = await this.client.listSessions();
         return textToolResult(
@@ -3235,7 +3287,7 @@ function cleanupOldCoiStateFiles(intercomDir, now = Date.now(), maxAgeMs = COI_S
   }
   for (const entry of entries) {
     if (!/^coi-.+-state\.json$/.test(entry)) continue;
-    const path = join6(intercomDir, entry);
+    const path = join7(intercomDir, entry);
     try {
       const stat = statSync(path);
       if (now - stat.mtimeMs > maxAgeMs) rmSync(path, { force: true });
@@ -3260,8 +3312,8 @@ async function runCoi(options) {
   const name = options.name ?? identity.name;
   const intercomDir = getIntercomDirPath();
   cleanupOldCoiStateFiles(intercomDir);
-  const socketPath = options.socketPath ?? join6(intercomDir, `coi-${process.pid}.sock`);
-  const statePath = options.statePath ?? join6(intercomDir, `coi-${sanitizeSegment(id)}-state.json`);
+  const socketPath = options.socketPath ?? join7(intercomDir, `coi-${process.pid}.sock`);
+  const statePath = options.statePath ?? join7(intercomDir, `coi-${sanitizeSegment(id)}-state.json`);
   rmSync(socketPath, { force: true });
   const appServer = spawn4(options.codexCommand, buildCodexAppServerArgs(options.codexArgs, socketPath), {
     cwd: options.cwd,

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `intercom_team` to the MCP and app-server bridge surfaces so owned Codex coworkers can find their manager and live siblings without a global peer search.
+
 ## 0.9.3 - 2026-07-15
 
 - Coordinate the Agent Intercom family on the `0.9.3` release line.

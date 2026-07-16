@@ -1317,6 +1317,52 @@ function loadConfig() {
   }
 }
 
+// codex/team.ts
+import { readFile } from "node:fs/promises";
+import { join as join5 } from "node:path";
+var LIVE_STATES = /* @__PURE__ */ new Set(["provisioning", "running", "idle", "needs_attention", "stopping"]);
+var stringValue = (value) => typeof value === "string" && value.trim() ? value.trim() : void 0;
+var connectedTo = (sessions, target) => {
+  const normalized = target.toLowerCase();
+  return sessions.some((session) => session.id === target || session.name?.toLowerCase() === normalized);
+};
+async function readWorkers(agentDir) {
+  try {
+    const parsed = JSON.parse(await readFile(join5(agentDir, "intercom", "orchestrator", "workers.json"), "utf8"));
+    return Array.isArray(parsed.workers) ? parsed.workers : [];
+  } catch {
+    return [];
+  }
+}
+async function resolveIntercomTeam(input) {
+  const env = input.env ?? process.env;
+  const workers = await readWorkers(input.agentDir ?? getAgentDirPath());
+  const workerId = stringValue(env.AGENT_INTERCOM_WORKER_ID);
+  const runId = stringValue(env.AGENT_INTERCOM_RUN_ID);
+  const current = workerId ? workers.find((worker) => stringValue(worker.id) === workerId && (!runId || stringValue(worker.runId) === runId)) : void 0;
+  const managerTarget = stringValue(current?.managerSessionId) ?? stringValue(env.AGENT_INTERCOM_MANAGER_TARGET) ?? stringValue(env.AGENT_INTERCOM_MANAGER_SESSION_ID);
+  const teamId = managerTarget ?? input.selfId;
+  const coworkers = workers.filter((worker) => worker.owned === true).filter((worker) => stringValue(worker.managerSessionId) === teamId).filter((worker) => LIVE_STATES.has(stringValue(worker.state) ?? "")).filter((worker) => stringValue(worker.id) !== workerId).map((worker) => {
+    const id = stringValue(worker.id);
+    if (!id) return void 0;
+    const target = stringValue(worker.intercomTarget) ?? id;
+    return { id, target, ...stringValue(worker.harness) ? { harness: stringValue(worker.harness) } : {}, ...stringValue(worker.role) ? { role: stringValue(worker.role) } : {}, ...stringValue(worker.state) ? { state: stringValue(worker.state) } : {}, connected: connectedTo(input.sessions, target) };
+  }).filter((member) => Boolean(member));
+  return { teamId, self: { id: input.selfId, ...workerId ? { workerId } : {}, isManager: !managerTarget }, manager: managerTarget ? { target: managerTarget, connected: connectedTo(input.sessions, managerTarget) } : { target: input.selfId, connected: true }, coworkers };
+}
+function formatIntercomTeam(team) {
+  const lines = [`Manager: ${team.manager ? `${team.manager.target} [${team.manager.connected ? "connected" : "not connected"}]` : "unknown"}`, `You: ${team.self.id}${team.self.isManager ? " [manager]" : ""}`];
+  if (!team.coworkers.length) lines.push("Coworkers: none");
+  else {
+    lines.push("Coworkers:");
+    for (const coworker of team.coworkers) {
+      const metadata = [coworker.harness, coworker.role, coworker.state].filter(Boolean).join(", ");
+      lines.push(`- ${coworker.id} target=${coworker.target}${metadata ? ` (${metadata})` : ""} [${coworker.connected ? "connected" : "not connected"}]`);
+    }
+  }
+  return lines.join("\n");
+}
+
 // codex/runtime.ts
 function shortHash(value) {
   return createHash2("sha256").update(value).digest("hex").slice(0, 8);
@@ -1507,6 +1553,12 @@ cwd: ${this.identity.cwd}`,
       { session_id: sessionId, name: this.identity.name, cwd: this.identity.cwd, model: this.identity.model }
     );
   }
+  async team() {
+    const client = await this.connect();
+    const sessions = await client.listSessions();
+    const team = await resolveIntercomTeam({ selfId: client.sessionId ?? this.identity.sessionId, sessions });
+    return textResult(formatIntercomTeam(team), team);
+  }
   async status() {
     const client = await this.connect();
     const sessions = await client.listSessions();
@@ -1674,6 +1726,12 @@ function buildToolDefinitions(runtime2) {
       description: "Return this Codex session's intercom identity for reliable targeting.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       handler: async () => runtime2.whoami()
+    },
+    {
+      name: "intercom_team",
+      description: "Show your current manager and the live coworkers owned by that manager. No arguments are required.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      handler: async () => runtime2.team()
     },
     {
       name: "intercom_status",
