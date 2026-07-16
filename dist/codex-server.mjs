@@ -1364,6 +1364,43 @@ function formatIntercomTeam(team) {
 }
 
 // codex/runtime.ts
+function matchesPendingSender(entry, to) {
+  return entry.from.id === to || entry.from.name?.toLowerCase() === to.toLowerCase() || entry.from.id.startsWith(to);
+}
+function selectPendingAsk(entries, to, which) {
+  const sorted = [...entries].sort((a, b) => a.receivedAt - b.receivedAt);
+  if (sorted.length === 0) throw new Error("No matching pending ask. Call intercom_pending to inspect unresolved asks.");
+  const matches = to ? sorted.filter((entry) => matchesPendingSender(entry, to)) : sorted;
+  if (matches.length === 0) throw new Error(`No pending ask from "${to}".`);
+  if (matches.length === 1) return matches[0];
+  if (!to && new Set(matches.map((entry) => entry.from.id)).size > 1) {
+    throw new Error("Multiple pending asks \u2014 specify `to` using a sender from intercom_pending.");
+  }
+  if (!which) {
+    const sender = to ? ` from "${to}"` : "";
+    throw new Error(`Multiple pending asks${sender} \u2014 specify \`which\` as \`oldest\` or \`latest\`.`);
+  }
+  return which === "oldest" ? matches[0] : matches[matches.length - 1];
+}
+function pendingSelector(entries, entry) {
+  const sameSender = entries.filter((candidate) => candidate.from.id === entry.from.id);
+  if (sameSender.length <= 1) return void 0;
+  const index = sameSender.findIndex((candidate) => candidate.message.id === entry.message.id);
+  if (index === 0) return "oldest";
+  if (index === sameSender.length - 1) return "latest";
+  return "queued";
+}
+function publicPendingEntry(entry, selector) {
+  return {
+    from: { id: entry.from.id, name: entry.from.name },
+    received_at: entry.receivedAt,
+    read: entry.read,
+    text: entry.message.content.text,
+    attachments: entry.message.content.attachments,
+    expects_reply: entry.message.expectsReply,
+    ...selector ? { selector } : {}
+  };
+}
 function shortHash(value) {
   return createHash2("sha256").update(value).digest("hex").slice(0, 8);
 }
@@ -1639,33 +1676,27 @@ ${replyText}`, { ok: true, message_id: result.id, reply });
     if (markRead) {
       for (const entry of unreadMessages) entry.read = true;
     }
-    const pendingAsks = Array.from(this.unresolvedAsks.values());
+    const pendingAsks = Array.from(this.unresolvedAsks.values()).sort((a, b) => a.receivedAt - b.receivedAt);
     const lines = [
       unreadMessages.length ? unreadMessages.map((entry) => `- ${entry.from.name || entry.from.id}: ${entry.message.content.text}${formatAttachments(entry.message.content.attachments)}`).join("\n") : "No unread messages.",
       pendingAsks.length ? `
 Pending asks:
-${pendingAsks.map((entry) => `- ${entry.message.id} from ${entry.from.name || entry.from.id}: ${entry.message.content.text}`).join("\n")}` : ""
+${pendingAsks.map((entry) => {
+        const selector = pendingSelector(pendingAsks, entry);
+        return `- ${entry.from.name || entry.from.id}${selector ? ` [${selector}]` : ""}: ${entry.message.content.text}`;
+      }).join("\n")}` : ""
     ].filter(Boolean);
-    return textResult(lines.join("\n"), { unread_messages: unreadMessages, pending_asks: pendingAsks });
+    return textResult(lines.join("\n"), {
+      unread_messages: unreadMessages.map((entry) => publicPendingEntry(entry)),
+      pending_asks: pendingAsks.map((entry) => publicPendingEntry(entry, pendingSelector(pendingAsks, entry)))
+    });
   }
-  async reply(message, to, replyTo) {
+  async reply(message, to, which) {
     let target;
-    if (replyTo) {
-      target = this.unresolvedAsks.get(replyTo);
-    } else if (to) {
-      const lowerTo = to.toLowerCase();
-      const matches = Array.from(this.unresolvedAsks.values()).filter(
-        (entry) => entry.from.id === to || entry.from.name?.toLowerCase() === lowerTo || entry.from.id.startsWith(to)
-      );
-      if (matches.length > 1) {
-        return textResult(`Multiple pending asks match "${to}". Call intercom_pending and reply with reply_to.`, { ok: false }, true);
-      }
-      target = matches[0];
-    } else if (this.unresolvedAsks.size === 1) {
-      target = Array.from(this.unresolvedAsks.values())[0];
-    }
-    if (!target) {
-      return textResult("No matching pending ask. Call intercom_pending to inspect unresolved asks.", { ok: false }, true);
+    try {
+      target = selectPendingAsk(Array.from(this.unresolvedAsks.values()), to, which);
+    } catch (error2) {
+      return textResult(error2 instanceof Error ? error2.message : String(error2), { ok: false }, true);
     }
     const result = await this.send(target.from.id, message, void 0, target.message.id);
     if (!result.isError) {
@@ -1815,18 +1846,18 @@ function buildToolDefinitions(runtime2) {
     },
     {
       name: "intercom_reply",
-      description: "Reply to a pending inbound ask. If exactly one ask is pending, to/reply_to can be omitted.",
+      description: "Reply to a pending inbound ask. Use to plus which=oldest/latest when one sender has multiple unresolved asks.",
       inputSchema: {
         type: "object",
         properties: {
           message: { type: "string" },
-          to: { type: "string" },
-          reply_to: { type: "string" }
+          to: { type: "string", description: "Optional sender/session selector; never a message or thread ID." },
+          which: { type: "string", enum: ["oldest", "latest"], description: "Select the oldest or latest ask from the chosen sender." }
         },
         required: ["message"],
         additionalProperties: false
       },
-      handler: async (args) => runtime2.reply(asString(args.message, "message"), typeof args.to === "string" ? args.to : void 0, typeof args.reply_to === "string" ? args.reply_to : void 0)
+      handler: async (args) => runtime2.reply(asString(args.message, "message"), typeof args.to === "string" ? args.to : void 0, args.which === "oldest" || args.which === "latest" ? args.which : void 0)
     }
   ];
 }

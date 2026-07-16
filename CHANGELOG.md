@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add ID-free `oldest`/`latest` selection for multiple pending asks from one sender, hide protocol IDs from pending output, and refuse a second unresolved ask to the same recipient.
+
 ## 0.10.0 - 2026-07-16
 
 - Add `intercom_team` to the MCP and app-server bridge surfaces so owned Codex coworkers can find their manager and live siblings without a global peer search.

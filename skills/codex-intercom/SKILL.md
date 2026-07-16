@@ -72,14 +72,17 @@ intercom_pending({ mark_read: false })
 intercom_reply({ message: "Use GET/PUT/DELETE only, max 3 retries." })
 ```
 
-When multiple asks are pending, pass either `to` or `reply_to`:
+When multiple asks are pending, select the sender with `to`. If that sender has multiple unresolved asks, select `oldest` or `latest` without using protocol IDs:
 
 ```typescript
 intercom_reply({
-  reply_to: "message-id-from-intercom_pending",
+  to: "planner",
+  which: "oldest",
   message: "Proceed, but preserve the public error shape."
 })
 ```
+
+Keep at most one unresolved `intercom_ask` to the same recipient. Use `intercom_send` for non-blocking follow-ups.
 
 Wake a bridge-managed worker:
 
