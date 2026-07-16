@@ -54,7 +54,7 @@ When an external intercom turn completes, `coi` refreshes the attached remote
 TUI by resuming the same thread. The inbound message and final response then
 appear in the already-open terminal instead of existing only in the saved
 transcript. This refresh happens after the turn is idle so Codex does not reopen
-in a phantom `Working` state.
+in a phantom `Working` state. Retryable app-server stream errors are reported as reconnecting without terminating the sidecar, allowing Codex's own retry to complete. Orchestrated `fresh: true` launches remove the saved `coi` thread state before registration.
 
 ## Install
 

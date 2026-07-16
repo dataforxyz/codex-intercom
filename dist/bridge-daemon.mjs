@@ -354,7 +354,11 @@ var CodexAppServerClient = class extends EventEmitter {
     }
     if (message.method) {
       this.emit("notification", message);
-      this.emit(message.method, message.params);
+      if (message.method === "error") {
+        this.emit("serverError", message.params);
+      } else {
+        this.emit(message.method, message.params);
+      }
     }
   }
   failAll(error) {
@@ -2299,6 +2303,15 @@ var VirtualCodexAgent = class {
   onNotification(message) {
     const threadId = getNotificationThreadId(message.params);
     if (!threadId || threadId !== this.threadId) return;
+    if (message.method === "error") {
+      const params = isRecord2(message.params) ? message.params : {};
+      const detail = isRecord2(params.error) && typeof params.error.message === "string" ? params.error.message : "Codex turn error";
+      const willRetry = params.willRetry === true;
+      this.client.updatePresence({ status: willRetry ? `reconnecting: ${detail}` : `error: ${detail}` });
+      process.stderr.write(`codex ${this.agent.id}: ${detail}${willRetry ? "; app-server is retrying" : ""}
+`);
+      return;
+    }
     if (message.method === "turn/started") {
       this.activeTurnId = getNotificationTurnId(message.params);
       this.client.updatePresence({ status: "active" });

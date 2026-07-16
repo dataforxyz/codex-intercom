@@ -516,6 +516,10 @@ export function cleanupOldCoiStateFiles(intercomDir: string, now = Date.now(), m
   }
 }
 
+export function resetCoiStateForFreshStart(statePath: string, fresh: boolean): void {
+  if (fresh) rmSync(statePath, { force: true });
+}
+
 export async function runCoi(options: CoiOptions): Promise<number> {
   if (hasCodexHelpOrVersion(options.codexArgs)) {
     const help = spawn(options.codexCommand, options.codexArgs, {
@@ -536,6 +540,8 @@ export async function runCoi(options: CoiOptions): Promise<number> {
   cleanupOldCoiStateFiles(intercomDir);
   const socketPath = options.socketPath ?? join(intercomDir, `coi-${process.pid}.sock`);
   const statePath = options.statePath ?? join(intercomDir, `coi-${sanitizeSegment(id)}-state.json`);
+  const fresh = process.env.AGENT_INTERCOM_FRESH === "1";
+  resetCoiStateForFreshStart(statePath, fresh);
   rmSync(socketPath, { force: true });
 
   const appServer = spawn(options.codexCommand, buildCodexAppServerArgs(options.codexArgs, socketPath), {
@@ -583,7 +589,7 @@ export async function runCoi(options: CoiOptions): Promise<number> {
       cwd: options.cwd,
       model: process.env.CODEX_INTERCOM_MODEL,
       instructions: options.instructions,
-      threadId: resumeRequest.threadId,
+      threadId: fresh ? undefined : resumeRequest.threadId,
       ...deriveBridgeAgentRuntimeConfig(options.codexArgs, options.cwd),
     }],
   };
@@ -612,7 +618,7 @@ export async function runCoi(options: CoiOptions): Promise<number> {
     optionArgs,
     threadId,
     promptArgs,
-    Boolean(resumeRequest.threadId),
+    Boolean(resumeRequest.threadId) && !fresh,
   );
   const refreshTuiArgs = ["resume", "--remote", remote, ...optionArgs, threadId];
   let copying = false;
