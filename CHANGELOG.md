@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 - 2026-07-16
 
 - Add `intercom_team` to the MCP and app-server bridge surfaces so owned Codex coworkers can find their manager and live siblings without a global peer search.
 - Forward orchestrator worker identity into Codex's MCP subprocess so team discovery resolves the owned worker instead of the helper session.
