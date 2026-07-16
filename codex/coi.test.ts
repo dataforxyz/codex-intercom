@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildCodexAppServerArgs, buildCoiTuiArgs, cleanupOldCoiStateFiles, createDefaultIdentity, deriveBridgeAgentRuntimeConfig, hasCodexHelpOrVersion, parseCoiArgs, resolveCoiResumeRequest, sanitizeSegment, splitCodexResumeArgs } from "./coi.ts";
+import { buildCodexAppServerArgs, buildCoiTuiArgs, cleanupOldCoiStateFiles, createDefaultIdentity, deriveBridgeAgentRuntimeConfig, hasCodexHelpOrVersion, parseCoiArgs, resetCoiStateForFreshStart, resolveCoiResumeRequest, sanitizeSegment, splitCodexResumeArgs } from "./coi.ts";
 import { filterAltIInput, TuiInputDecoder } from "./tui-input.ts";
 
 test("sanitizeSegment keeps readable safe ids", () => {
@@ -245,6 +245,20 @@ test("deriveBridgeAgentRuntimeConfig supports short and bypass flags", () => {
     approvalPolicy: "never",
     sandboxPolicy: { type: "dangerFullAccess" },
   });
+});
+
+test("fresh worker startup removes the persisted Codex bridge thread state", () => {
+  const dir = mkdtempSync(join(tmpdir(), "coi-fresh-start-"));
+  try {
+    const path = join(dir, "coi-state.json");
+    writeFileSync(path, JSON.stringify({ agents: { worker: { threadId: "thread-old", updatedAt: 1 } } }));
+    resetCoiStateForFreshStart(path, false);
+    assert.equal(existsSync(path), true);
+    resetCoiStateForFreshStart(path, true);
+    assert.equal(existsSync(path), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("cleanupOldCoiStateFiles removes only stale coi state files", () => {

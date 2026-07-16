@@ -385,6 +385,17 @@ export class VirtualCodexAgent {
     const threadId = getNotificationThreadId(message.params);
     if (!threadId || threadId !== this.threadId) return;
 
+    if (message.method === "error") {
+      const params = isRecord(message.params) ? message.params : {};
+      const detail = isRecord(params.error) && typeof params.error.message === "string"
+        ? params.error.message
+        : "Codex turn error";
+      const willRetry = params.willRetry === true;
+      this.client.updatePresence({ status: willRetry ? `reconnecting: ${detail}` : `error: ${detail}` });
+      process.stderr.write(`codex ${this.agent.id}: ${detail}${willRetry ? "; app-server is retrying" : ""}\n`);
+      return;
+    }
+
     if (message.method === "turn/started") {
       this.activeTurnId = getNotificationTurnId(message.params);
       this.client.updatePresence({ status: "active" });

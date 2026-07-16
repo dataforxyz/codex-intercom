@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { defaultServerRequestResponse, WebSocketFrameDecoder } from "./app-server-client.ts";
+import { CodexAppServerClient, defaultServerRequestResponse, WebSocketFrameDecoder } from "./app-server-client.ts";
 
 function frame(opcode: number, payload: string, fin = true): Buffer {
   const data = Buffer.from(payload);
@@ -23,6 +23,27 @@ test("defaultServerRequestResponse declines interactive requests", () => {
 
 test("defaultServerRequestResponse rejects unknown requests", () => {
   assert.throws(() => defaultServerRequestResponse("unknown/request"), /Unsupported app-server request/);
+});
+
+test("app-server error notifications do not trigger Node's unhandled error event", () => {
+  const client = new CodexAppServerClient();
+  let notification: unknown;
+  let serverError: unknown;
+  client.on("notification", (message) => { notification = message; });
+  client.on("serverError", (params) => { serverError = params; });
+  const params = {
+    error: {
+      message: "Reconnecting... 1/5",
+      codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } },
+      additionalDetails: "stream disconnected before completion: stream closed before response.completed",
+    },
+    willRetry: true,
+    threadId: "thread-1",
+    turnId: "turn-1",
+  };
+  assert.doesNotThrow(() => (client as any).handleLine(JSON.stringify({ method: "error", params })));
+  assert.deepEqual(notification, { method: "error", params });
+  assert.deepEqual(serverError, params);
 });
 
 test("WebSocketFrameDecoder reassembles fragmented text frames", () => {

@@ -8,6 +8,7 @@ class FakeIntercomClient extends EventEmitter {
   connected = false;
   connectCount = 0;
   sessionId: string | null = null;
+  statuses: string[] = [];
 
   isConnected(): boolean { return this.connected; }
   async connect(_registration: unknown, sessionId?: string): Promise<void> {
@@ -19,7 +20,9 @@ class FakeIntercomClient extends EventEmitter {
     this.connected = false;
     this.sessionId = null;
   }
-  updatePresence(): void {}
+  updatePresence(presence: { status?: string }): void {
+    if (presence.status) this.statuses.push(presence.status);
+  }
   drop(): void {
     this.connected = false;
     this.sessionId = null;
@@ -99,6 +102,28 @@ test("getApprovedIntercomSend extracts approved intercom_send tool params", () =
       tool_params: { to: "manager", message: "ACK" },
     },
   }), null);
+});
+
+test("Codex stream reconnect notifications keep the worker alive and visible as retrying", () => {
+  const client = new FakeIntercomClient();
+  const agent = new VirtualCodexAgent(
+    { id: "codex-stream", name: "codex-stream", cwd: process.cwd() } as any,
+    {} as any,
+    { agents: { "codex-stream": { threadId: "thread-1", updatedAt: 1 } } },
+    "/tmp/codex-stream-state.json",
+    {},
+    { client: client as unknown as IntercomClient },
+  );
+  agent.onNotification({
+    method: "error",
+    params: {
+      error: { message: "Reconnecting... 1/5", additionalDetails: "stream closed before response.completed" },
+      willRetry: true,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    },
+  });
+  assert.equal(client.statuses.at(-1), "reconnecting: Reconnecting... 1/5");
 });
 
 test("persistent Codex bridge reconnects its stable Intercom identity after broker restart", async () => {

@@ -5,6 +5,7 @@
 - Add ID-free `oldest`/`latest` selection for multiple pending asks from one sender, hide protocol IDs from pending output, and refuse a second unresolved ask to the same recipient.
 - Automatically reconnect persistent bridges and MCP runtimes with their stable Intercom identity after broker restarts.
 - Clarify that assignments and progress/status checkpoints use `intercom_send`, reserving `intercom_ask` for blocking decisions.
+- Keep `coi` alive when Codex app-server emits retryable `error` notifications, and honor orchestrator fresh starts by discarding persisted bridge thread state.
 
 ## 0.10.0 - 2026-07-16
 

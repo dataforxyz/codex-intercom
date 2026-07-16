@@ -421,7 +421,11 @@ export class CodexAppServerClient extends EventEmitter {
 
     if (message.method) {
       this.emit("notification", message);
-      this.emit(message.method, message.params);
+      if (message.method === "error") {
+        this.emit("serverError", message.params);
+      } else {
+        this.emit(message.method, message.params);
+      }
     }
   }
 

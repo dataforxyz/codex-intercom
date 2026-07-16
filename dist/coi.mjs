@@ -362,7 +362,11 @@ var CodexAppServerClient = class extends EventEmitter {
     }
     if (message.method) {
       this.emit("notification", message);
-      this.emit(message.method, message.params);
+      if (message.method === "error") {
+        this.emit("serverError", message.params);
+      } else {
+        this.emit(message.method, message.params);
+      }
     }
   }
   failAll(error) {
@@ -2310,6 +2314,15 @@ var VirtualCodexAgent = class {
   onNotification(message) {
     const threadId = getNotificationThreadId(message.params);
     if (!threadId || threadId !== this.threadId) return;
+    if (message.method === "error") {
+      const params = isRecord2(message.params) ? message.params : {};
+      const detail = isRecord2(params.error) && typeof params.error.message === "string" ? params.error.message : "Codex turn error";
+      const willRetry = params.willRetry === true;
+      this.client.updatePresence({ status: willRetry ? `reconnecting: ${detail}` : `error: ${detail}` });
+      process.stderr.write(`codex ${this.agent.id}: ${detail}${willRetry ? "; app-server is retrying" : ""}
+`);
+      return;
+    }
     if (message.method === "turn/started") {
       this.activeTurnId = getNotificationTurnId(message.params);
       this.client.updatePresence({ status: "active" });
@@ -3381,6 +3394,9 @@ function cleanupOldCoiStateFiles(intercomDir, now = Date.now(), maxAgeMs = COI_S
     }
   }
 }
+function resetCoiStateForFreshStart(statePath, fresh) {
+  if (fresh) rmSync(statePath, { force: true });
+}
 async function runCoi(options) {
   if (hasCodexHelpOrVersion(options.codexArgs)) {
     const help = spawn4(options.codexCommand, options.codexArgs, {
@@ -3400,6 +3416,8 @@ async function runCoi(options) {
   cleanupOldCoiStateFiles(intercomDir);
   const socketPath = options.socketPath ?? join7(intercomDir, `coi-${process.pid}.sock`);
   const statePath = options.statePath ?? join7(intercomDir, `coi-${sanitizeSegment(id)}-state.json`);
+  const fresh = process.env.AGENT_INTERCOM_FRESH === "1";
+  resetCoiStateForFreshStart(statePath, fresh);
   rmSync(socketPath, { force: true });
   const appServer = spawn4(options.codexCommand, buildCodexAppServerArgs(options.codexArgs, socketPath), {
     cwd: options.cwd,
@@ -3441,7 +3459,7 @@ async function runCoi(options) {
       cwd: options.cwd,
       model: process.env.CODEX_INTERCOM_MODEL,
       instructions: options.instructions,
-      threadId: resumeRequest.threadId,
+      threadId: fresh ? void 0 : resumeRequest.threadId,
       ...deriveBridgeAgentRuntimeConfig(options.codexArgs, options.cwd)
     }]
   };
@@ -3470,7 +3488,7 @@ async function runCoi(options) {
     optionArgs,
     threadId,
     promptArgs,
-    Boolean(resumeRequest.threadId)
+    Boolean(resumeRequest.threadId) && !fresh
   );
   const refreshTuiArgs = ["resume", "--remote", remote, ...optionArgs, threadId];
   let copying = false;
@@ -3538,6 +3556,7 @@ export {
   deriveBridgeAgentRuntimeConfig,
   hasCodexHelpOrVersion,
   parseCoiArgs,
+  resetCoiStateForFreshStart,
   resolveCoiResumeRequest,
   runCoi,
   sanitizeSegment,
