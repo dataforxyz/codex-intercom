@@ -39,7 +39,7 @@ export async function resolveIntercomTeam(input: { selfId: string; sessions: Tea
   return { teamId, self: { id: input.selfId, ...(workerId ? { workerId } : {}), isManager: !managerTarget }, manager: managerTarget ? { target: managerTarget, connected: connectedTo(input.sessions, managerTarget) } : { target: input.selfId, connected: true }, coworkers };
 }
 export function formatIntercomTeam(team: IntercomTeam): string {
-  const lines = [`Manager: ${team.manager ? `${team.manager.target} [${team.manager.connected ? "connected" : "not connected"}]` : "unknown"}`, `You: ${team.self.id}${team.self.isManager ? " [manager]" : ""}`];
+  const lines = [`Manager: ${team.manager ? `${team.manager.target} [${team.manager.connected ? "connected" : "not connected"}]` : "unknown"}`, `You: ${team.self.workerId ?? team.self.id}${team.self.isManager ? " [manager]" : ""}`];
   if (!team.coworkers.length) lines.push("Coworkers: none");
   else { lines.push("Coworkers:"); for (const coworker of team.coworkers) { const metadata = [coworker.harness, coworker.role, coworker.state].filter(Boolean).join(", "); lines.push(`- ${coworker.id} target=${coworker.target}${metadata ? ` (${metadata})` : ""} [${coworker.connected ? "connected" : "not connected"}]`); } }
   return lines.join("\n");

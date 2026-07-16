@@ -1351,7 +1351,7 @@ async function resolveIntercomTeam(input) {
   return { teamId, self: { id: input.selfId, ...workerId ? { workerId } : {}, isManager: !managerTarget }, manager: managerTarget ? { target: managerTarget, connected: connectedTo(input.sessions, managerTarget) } : { target: input.selfId, connected: true }, coworkers };
 }
 function formatIntercomTeam(team) {
-  const lines = [`Manager: ${team.manager ? `${team.manager.target} [${team.manager.connected ? "connected" : "not connected"}]` : "unknown"}`, `You: ${team.self.id}${team.self.isManager ? " [manager]" : ""}`];
+  const lines = [`Manager: ${team.manager ? `${team.manager.target} [${team.manager.connected ? "connected" : "not connected"}]` : "unknown"}`, `You: ${team.self.workerId ?? team.self.id}${team.self.isManager ? " [manager]" : ""}`];
   if (!team.coworkers.length) lines.push("Coworkers: none");
   else {
     lines.push("Coworkers:");

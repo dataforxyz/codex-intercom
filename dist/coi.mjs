@@ -1932,7 +1932,7 @@ async function resolveIntercomTeam(input) {
   return { teamId, self: { id: input.selfId, ...workerId ? { workerId } : {}, isManager: !managerTarget }, manager: managerTarget ? { target: managerTarget, connected: connectedTo(input.sessions, managerTarget) } : { target: input.selfId, connected: true }, coworkers };
 }
 function formatIntercomTeam(team) {
-  const lines = [`Manager: ${team.manager ? `${team.manager.target} [${team.manager.connected ? "connected" : "not connected"}]` : "unknown"}`, `You: ${team.self.id}${team.self.isManager ? " [manager]" : ""}`];
+  const lines = [`Manager: ${team.manager ? `${team.manager.target} [${team.manager.connected ? "connected" : "not connected"}]` : "unknown"}`, `You: ${team.self.workerId ?? team.self.id}${team.self.isManager ? " [manager]" : ""}`];
   if (!team.coworkers.length) lines.push("Coworkers: none");
   else {
     lines.push("Coworkers:");
@@ -2923,6 +2923,15 @@ var CODEX_OPTIONS_WITH_VALUE = /* @__PURE__ */ new Set([
   "--local-provider"
 ]);
 var COI_STATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+var MANAGED_MCP_ENV_KEYS = [
+  "AGENT_INTERCOM_WORKER_ID",
+  "AGENT_INTERCOM_RUN_ID",
+  "AGENT_INTERCOM_MANAGER_TARGET",
+  "AGENT_INTERCOM_MANAGER_SESSION_ID",
+  "AGENT_INTERCOM_SYSTEMD_UNIT",
+  "AGENT_INTERCOM_OWNED",
+  "AGENT_INTERCOM_AGENT_DIR"
+];
 function sanitizeSegment(value) {
   return value.replace(/[^a-zA-Z0-9._:-]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase() || "codex";
 }
@@ -3136,7 +3145,7 @@ function resolveCoiResumeRequest(args) {
 function buildCoiTuiArgs(remote, optionArgs, threadId, promptArgs, explicitResume) {
   return explicitResume ? ["resume", "--remote", remote, ...optionArgs, threadId, ...promptArgs] : ["--remote", remote, ...optionArgs, ...promptArgs];
 }
-function buildCodexAppServerArgs(args, socketPath) {
+function buildCodexAppServerArgs(args, socketPath, env = process.env) {
   const { optionArgs } = splitCodexResumeArgs(args);
   const appServerArgs = [];
   for (let index = 0; index < optionArgs.length; index += 1) {
@@ -3154,6 +3163,10 @@ function buildCodexAppServerArgs(args, socketPath) {
       appServerArgs.push(optionArgs[index + 1]);
       index += 1;
     }
+  }
+  for (const key of MANAGED_MCP_ENV_KEYS) {
+    const value = env[key];
+    if (value) appServerArgs.push("-c", `mcp_servers.codex-intercom.env.${key}=${JSON.stringify(value)}`);
   }
   return ["app-server", ...appServerArgs, "--listen", `unix://${socketPath}`];
 }

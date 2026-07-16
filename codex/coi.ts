@@ -58,6 +58,15 @@ const CODEX_OPTIONS_WITH_VALUE = new Set([
   "--local-provider",
 ]);
 const COI_STATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const MANAGED_MCP_ENV_KEYS = [
+  "AGENT_INTERCOM_WORKER_ID",
+  "AGENT_INTERCOM_RUN_ID",
+  "AGENT_INTERCOM_MANAGER_TARGET",
+  "AGENT_INTERCOM_MANAGER_SESSION_ID",
+  "AGENT_INTERCOM_SYSTEMD_UNIT",
+  "AGENT_INTERCOM_OWNED",
+  "AGENT_INTERCOM_AGENT_DIR",
+] as const;
 
 export function sanitizeSegment(value: string): string {
   return value
@@ -315,7 +324,11 @@ export function buildCoiTuiArgs(
     : ["--remote", remote, ...optionArgs, ...promptArgs];
 }
 
-export function buildCodexAppServerArgs(args: string[], socketPath: string): string[] {
+export function buildCodexAppServerArgs(
+  args: string[],
+  socketPath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
   const { optionArgs } = splitCodexResumeArgs(args);
   const appServerArgs: string[] = [];
 
@@ -334,6 +347,11 @@ export function buildCodexAppServerArgs(args: string[], socketPath: string): str
       appServerArgs.push(optionArgs[index + 1]);
       index += 1;
     }
+  }
+
+  for (const key of MANAGED_MCP_ENV_KEYS) {
+    const value = env[key];
+    if (value) appServerArgs.push("-c", `mcp_servers.codex-intercom.env.${key}=${JSON.stringify(value)}`);
   }
 
   return ["app-server", ...appServerArgs, "--listen", `unix://${socketPath}`];

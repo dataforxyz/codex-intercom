@@ -94,11 +94,30 @@ test("buildCodexAppServerArgs forwards only app-server-compatible config options
       "-c", 'model_provider="cliproxy"',
       "--enable", "multi_agent",
       "hello there",
-    ], "/tmp/coi.sock"),
+    ], "/tmp/coi.sock", {}),
     [
       "app-server",
       "-c", 'model_provider="cliproxy"',
       "--enable", "multi_agent",
+      "--listen", "unix:///tmp/coi.sock",
+    ],
+  );
+});
+
+test("buildCodexAppServerArgs forwards managed worker identity to the MCP subprocess", () => {
+  assert.deepEqual(
+    buildCodexAppServerArgs([], "/tmp/coi.sock", {
+      AGENT_INTERCOM_WORKER_ID: "worker-1",
+      AGENT_INTERCOM_RUN_ID: "run-1",
+      AGENT_INTERCOM_MANAGER_TARGET: "manager-1",
+      AGENT_INTERCOM_OWNED: "1",
+    }),
+    [
+      "app-server",
+      "-c", 'mcp_servers.codex-intercom.env.AGENT_INTERCOM_WORKER_ID="worker-1"',
+      "-c", 'mcp_servers.codex-intercom.env.AGENT_INTERCOM_RUN_ID="run-1"',
+      "-c", 'mcp_servers.codex-intercom.env.AGENT_INTERCOM_MANAGER_TARGET="manager-1"',
+      "-c", 'mcp_servers.codex-intercom.env.AGENT_INTERCOM_OWNED="1"',
       "--listen", "unix:///tmp/coi.sock",
     ],
   );
