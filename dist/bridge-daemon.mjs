@@ -637,10 +637,10 @@ import { EventEmitter as EventEmitter2 } from "events";
 import net2 from "net";
 import { randomUUID as randomUUID2 } from "crypto";
 
-// node_modules/@dataforxyz/agent-intercom-core/src/policy.ts
+// node_modules/@dataforxyz/agent-intercom-core/dist/policy.js
 var POLICY_SEMANTICS_VERSION = 1;
 
-// node_modules/@dataforxyz/agent-intercom-core/src/policy-vectors.ts
+// node_modules/@dataforxyz/agent-intercom-core/dist/policy-vectors.js
 var localRoot = {
   id: "local-root",
   kind: "local",
@@ -2186,6 +2186,10 @@ function resolveSessionTarget(sessions, nameOrId) {
   }
   return null;
 }
+function formatSessionDisplay(session) {
+  const name = session.name || session.id;
+  return session.origin === "remote" ? `${name} [remote:${session.remoteHostId || "unknown-host"}]` : name;
+}
 function formatSessionList(sessions, currentSessionId, currentCwd) {
   if (!sessions.length) return "No intercom sessions connected.";
   return sessions.map((session) => {
@@ -2195,7 +2199,7 @@ function formatSessionList(sessions, currentSessionId, currentCwd) {
       session.status
     ].filter((tag) => Boolean(tag));
     const suffix = tags.length ? ` [${tags.join(", ")}]` : "";
-    return `- ${session.name || "unnamed"} (${session.id.slice(0, 8)}) - ${session.cwd} (${session.model})${suffix}`;
+    return `- ${formatSessionDisplay(session)} (${session.id.slice(0, 8)}) - ${session.cwd} (${session.model})${suffix}`;
   }).join("\n");
 }
 
@@ -2235,7 +2239,7 @@ Agent instructions:
 ${agent.instructions}` : "";
   return [
     `Intercom message for ${agent.name}.`,
-    `From: ${from.name || from.id} (${from.id})`,
+    `From: ${formatSessionDisplay(from)} (${from.id})`,
     `Message id: ${message.id}`,
     "",
     message.content.text,
