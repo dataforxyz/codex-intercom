@@ -645,6 +645,139 @@ import { EventEmitter as EventEmitter2 } from "events";
 import net2 from "net";
 import { randomUUID as randomUUID2 } from "crypto";
 
+// node_modules/@dataforxyz/agent-intercom-core/src/policy.ts
+var POLICY_SEMANTICS_VERSION = 1;
+
+// node_modules/@dataforxyz/agent-intercom-core/src/policy-vectors.ts
+var localRoot = {
+  id: "local-root",
+  kind: "local",
+  state: "active",
+  generation: 1,
+  policy: "local-public",
+  rootSessionId: "local-root"
+};
+var localPeer = {
+  id: "local-peer",
+  kind: "local",
+  state: "active",
+  generation: 1,
+  policy: "local-public",
+  rootSessionId: "local-peer"
+};
+var remoteManager = {
+  id: "remote-manager",
+  kind: "remote",
+  state: "active",
+  generation: 1,
+  policy: "remote-parent",
+  parentSessionId: "local-root",
+  rootSessionId: "local-root"
+};
+var remoteChild = {
+  id: "remote-child",
+  kind: "remote",
+  state: "active",
+  generation: 1,
+  policy: "remote-parent",
+  parentSessionId: "remote-manager",
+  rootSessionId: "local-root"
+};
+var remoteSibling = {
+  id: "remote-sibling",
+  kind: "remote",
+  state: "active",
+  generation: 1,
+  policy: "remote-parent",
+  parentSessionId: "remote-manager",
+  rootSessionId: "local-root"
+};
+var POLICY_VECTORS = [
+  {
+    name: "local sessions remain public",
+    principals: [localRoot, localPeer],
+    actorId: "local-root",
+    action: "send",
+    targetId: "local-peer",
+    expectedAllowed: true,
+    expectedReasonOrCode: "local-public"
+  },
+  {
+    name: "remote manager can reach direct local parent",
+    principals: [localRoot, remoteManager],
+    actorId: "remote-manager",
+    action: "send",
+    targetId: "local-root",
+    expectedAllowed: true,
+    expectedReasonOrCode: "direct-parent"
+  },
+  {
+    name: "local parent can reach direct remote child",
+    principals: [localRoot, remoteManager],
+    actorId: "local-root",
+    action: "ask",
+    targetId: "remote-manager",
+    expectedAllowed: true,
+    expectedReasonOrCode: "direct-parent"
+  },
+  {
+    name: "remote child cannot skip its direct parent in phase zero",
+    principals: [localRoot, remoteManager, remoteChild],
+    actorId: "remote-child",
+    action: "send",
+    targetId: "local-root",
+    expectedAllowed: false,
+    expectedReasonOrCode: "POLICY_DENIED"
+  },
+  {
+    name: "remote siblings cannot communicate in phase zero",
+    principals: [localRoot, remoteManager, remoteChild, remoteSibling],
+    actorId: "remote-child",
+    action: "discover",
+    targetId: "remote-sibling",
+    expectedAllowed: false,
+    expectedReasonOrCode: "POLICY_DENIED"
+  },
+  {
+    name: "unrelated local session cannot discover remote principal",
+    principals: [localRoot, localPeer, remoteManager],
+    actorId: "local-peer",
+    action: "discover",
+    targetId: "remote-manager",
+    expectedAllowed: false,
+    expectedReasonOrCode: "POLICY_DENIED"
+  },
+  {
+    name: "remote principal cannot reach unrelated local session",
+    principals: [localRoot, localPeer, remoteManager],
+    actorId: "remote-manager",
+    action: "send",
+    targetId: "local-peer",
+    expectedAllowed: false,
+    expectedReasonOrCode: "POLICY_DENIED"
+  },
+  {
+    name: "revoked principal cannot communicate",
+    principals: [localRoot, { ...remoteManager, state: "revoked" }],
+    actorId: "remote-manager",
+    action: "send",
+    targetId: "local-root",
+    expectedAllowed: false,
+    expectedReasonOrCode: "REVOKED_PRINCIPAL"
+  },
+  {
+    name: "stale actor generation cannot send",
+    principals: [localRoot, { ...remoteManager, generation: 2 }],
+    actorId: "remote-manager",
+    action: "send",
+    targetId: "local-root",
+    context: { actorGeneration: 1 },
+    expectedAllowed: false,
+    expectedReasonOrCode: "STALE_GENERATION"
+  }
+];
+var POLICY_SEMANTICS_HASH = "78178a5fd57c353342642968d3a27262ed02cb236927723675d875959413dce3";
+
 // broker/framing.ts
 var MAX_FRAME_BYTES = 1024 * 1024;
 function writeMessage(socket, msg) {
@@ -824,6 +957,49 @@ var PersistentOutboundOutbox = class {
   }
 };
 
+// broker/access-credential.ts
+import { readFileSync as readFileSync4 } from "fs";
+var ACCESS_CREDENTIAL_ENV = "AGENT_INTERCOM_ACCESS_CREDENTIAL_PATH";
+var ACCESS_CREDENTIAL_VERSION = 1;
+function nonEmptyString(value) {
+  return typeof value === "string" && value.length > 0 && !value.includes("\0");
+}
+function loadRemoteAccessCredential(env = process.env) {
+  const path = env[ACCESS_CREDENTIAL_ENV]?.trim();
+  if (!path) return void 0;
+  const parsed = JSON.parse(readFileSync4(path, "utf8"));
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Invalid Agent Intercom access credential at ${path}`);
+  }
+  const credential = parsed;
+  if (nonEmptyString(credential.enrollmentToken)) {
+    return { path, access: { enrollmentToken: credential.enrollmentToken }, enrollment: true };
+  }
+  if (credential.version === ACCESS_CREDENTIAL_VERSION && nonEmptyString(credential.sessionCredential) && nonEmptyString(credential.sessionId) && typeof credential.generation === "number" && Number.isSafeInteger(credential.generation) && credential.generation > 0) {
+    return {
+      path,
+      access: {
+        sessionCredential: credential.sessionCredential,
+        sessionId: credential.sessionId,
+        generation: credential.generation
+      },
+      enrollment: false
+    };
+  }
+  throw new Error(`Invalid Agent Intercom access credential at ${path}`);
+}
+function writeRemoteSessionCredential(path, sessionId, metadata) {
+  if (!metadata.sessionCredential) {
+    throw new Error("Remote enrollment response omitted the session credential");
+  }
+  writeDurableJson(path, {
+    version: ACCESS_CREDENTIAL_VERSION,
+    sessionCredential: metadata.sessionCredential,
+    sessionId,
+    generation: metadata.generation
+  });
+}
+
 // broker/client.ts
 function toError(error) {
   return error instanceof Error ? error : new Error(String(error));
@@ -884,7 +1060,17 @@ function isSessionInfo(value) {
   if (session.peerUid !== void 0 && typeof session.peerUid !== "number") {
     return false;
   }
-  return session.trustedLocal === void 0 || typeof session.trustedLocal === "boolean";
+  if (session.trustedLocal !== void 0 && typeof session.trustedLocal !== "boolean") return false;
+  if (session.origin !== void 0 && session.origin !== "local" && session.origin !== "remote") return false;
+  if (session.remoteHostId !== void 0 && typeof session.remoteHostId !== "string") return false;
+  if (session.parentSessionId !== void 0 && typeof session.parentSessionId !== "string") return false;
+  if (session.rootSessionId !== void 0 && typeof session.rootSessionId !== "string") return false;
+  return session.generation === void 0 || typeof session.generation === "number" && Number.isSafeInteger(session.generation);
+}
+function isRemoteAccessMetadata(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const access = value;
+  return access.origin === "remote" && typeof access.remoteHostId === "string" && typeof access.parentSessionId === "string" && typeof access.rootSessionId === "string" && typeof access.generation === "number" && Number.isSafeInteger(access.generation) && access.generation > 0 && (access.sessionCredential === void 0 || typeof access.sessionCredential === "string");
 }
 var IntercomClient = class extends EventEmitter2 {
   socket = null;
@@ -893,6 +1079,7 @@ var IntercomClient = class extends EventEmitter2 {
   pendingLists = /* @__PURE__ */ new Map();
   pendingAskControls = /* @__PURE__ */ new Map();
   outbox = null;
+  remoteAccessCredential;
   disconnecting = false;
   disconnectError = null;
   failPending(error) {
@@ -942,6 +1129,7 @@ var IntercomClient = class extends EventEmitter2 {
       let target;
       try {
         target = getBrokerConnectTarget();
+        this.remoteAccessCredential = loadRemoteAccessCredential();
         socket = connectToBrokerTarget(target);
       } catch (error) {
         reject(toError(error));
@@ -1038,7 +1226,8 @@ var IntercomClient = class extends EventEmitter2 {
           protocol: INTERCOM_PROTOCOL_NAME,
           version: INTERCOM_PROTOCOL_VERSION,
           session,
-          ...sessionId ? { sessionId } : {},
+          ...!this.remoteAccessCredential && sessionId ? { sessionId } : {},
+          ...this.remoteAccessCredential ? { access: this.remoteAccessCredential.access } : {},
           ...typeof target === "string" ? {} : { stateId: target.stateId }
         });
       } catch (error) {
@@ -1067,6 +1256,24 @@ var IntercomClient = class extends EventEmitter2 {
         }
         if (this._sessionId !== null) {
           throw new Error("Received duplicate registered message");
+        }
+        if (this.remoteAccessCredential) {
+          const contract = brokerMessage.remoteAccess;
+          const contractFields = typeof contract === "object" && contract !== null ? contract : void 0;
+          if (!contractFields || contractFields.feature !== "remote-access-v1" || contractFields.policySemanticsVersion !== POLICY_SEMANTICS_VERSION || contractFields.policySemanticsHash !== POLICY_SEMANTICS_HASH) {
+            throw new Error("Remote Intercom policy contract is absent or incompatible");
+          }
+          if (!isRemoteAccessMetadata(brokerMessage.access)) {
+            throw new Error("Remote Intercom registration omitted broker-owned provenance");
+          }
+          if (this.remoteAccessCredential.enrollment) {
+            writeRemoteSessionCredential(this.remoteAccessCredential.path, brokerMessage.sessionId, brokerMessage.access);
+          } else {
+            const reconnect = this.remoteAccessCredential.access;
+            if (!("sessionId" in reconnect) || reconnect.sessionId !== brokerMessage.sessionId || reconnect.generation !== brokerMessage.access.generation) {
+              throw new Error("Remote Intercom reconnect identity or generation changed unexpectedly");
+            }
+          }
         }
         this._sessionId = brokerMessage.sessionId;
         this.outbox = new PersistentOutboundOutbox(brokerMessage.sessionId);
@@ -1414,7 +1621,7 @@ var IntercomClient = class extends EventEmitter2 {
 
 // broker/spawn.ts
 import { spawn as spawn2 } from "child_process";
-import { existsSync as existsSync3, readFileSync as readFileSync4, unlinkSync, writeFileSync as writeFileSync3 } from "fs";
+import { existsSync as existsSync3, readFileSync as readFileSync5, unlinkSync, writeFileSync as writeFileSync3 } from "fs";
 import { join as join4, dirname as dirname3 } from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
@@ -1469,7 +1676,11 @@ function isBrokerHealthOkMessage(message, requestId) {
     return false;
   }
   const response = message;
-  return response.type === "health_ok" && response.requestId === requestId && response.protocol === INTERCOM_PROTOCOL_NAME && response.version === INTERCOM_PROTOCOL_VERSION;
+  if (response.type !== "health_ok" || response.requestId !== requestId || response.protocol !== INTERCOM_PROTOCOL_NAME || response.version !== INTERCOM_PROTOCOL_VERSION) return false;
+  const remoteAccess = response.remoteAccess;
+  if (typeof remoteAccess !== "object" || remoteAccess === null || Array.isArray(remoteAccess)) return false;
+  const contract = remoteAccess;
+  return contract.feature === "remote-access-v1" && contract.policySemanticsVersion === POLICY_SEMANTICS_VERSION && contract.policySemanticsHash === POLICY_SEMANTICS_HASH;
 }
 function writeWindowsHiddenLauncher(commandLine, launcherPath = getWindowsHiddenLauncherPath()) {
   ensureIntercomRuntimeDir(dirname3(launcherPath));
@@ -1578,7 +1789,7 @@ async function stopBrokerProcess(pidFile = BROKER_PID, timeoutMs = 3e3) {
   if (!existsSync3(pidFile)) return;
   let pid;
   try {
-    pid = Number.parseInt(readFileSync4(pidFile, "utf-8").trim(), 10);
+    pid = Number.parseInt(readFileSync5(pidFile, "utf-8").trim(), 10);
   } catch {
     return;
   }
@@ -1605,7 +1816,7 @@ async function isBrokerRunning() {
   }
   if (!existsSync3(BROKER_PID)) return false;
   try {
-    const pid = parseInt(readFileSync4(BROKER_PID, "utf-8").trim(), 10);
+    const pid = parseInt(readFileSync5(BROKER_PID, "utf-8").trim(), 10);
     if (!Number.isFinite(pid)) return false;
     process.kill(pid, 0);
     return checkSocketConnectable();
@@ -1706,7 +1917,7 @@ function isSpawnLockStale() {
     return false;
   }
   try {
-    const [pidLine = "", createdAtLine = "0"] = readFileSync4(BROKER_SPAWN_LOCK, "utf-8").trim().split("\n");
+    const [pidLine = "", createdAtLine = "0"] = readFileSync5(BROKER_SPAWN_LOCK, "utf-8").trim().split("\n");
     const pid = Number.parseInt(pidLine, 10);
     const createdAt = Number.parseInt(createdAtLine, 10);
     const ageMs = Date.now() - createdAt;
@@ -1740,7 +1951,7 @@ async function waitForBroker(timeoutMs = 5e3) {
 }
 
 // config.ts
-import { existsSync as existsSync4, readFileSync as readFileSync5 } from "fs";
+import { existsSync as existsSync4, readFileSync as readFileSync6 } from "fs";
 import { join as join5, resolve as resolve3 } from "path";
 import { homedir as homedir2 } from "os";
 var DEFAULT_ASK_TIMEOUT_MS = 45 * 1e3;
@@ -1777,7 +1988,7 @@ function loadConfig() {
     return { ...defaults };
   }
   try {
-    const raw = readFileSync5(configPath, "utf-8");
+    const raw = readFileSync6(configPath, "utf-8");
     const parsed = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       throw new Error("Config must be a JSON object");

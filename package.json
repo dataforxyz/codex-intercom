@@ -42,7 +42,7 @@
     "codex:mcp": "tsx codex/server.ts",
     "codex:bridge": "tsx codex/bridge-daemon.ts",
     "coi": "tsx codex/coi.ts",
-    "test": "tsx --test broker/client.test.ts broker/framing.test.ts broker/ownership.test.ts broker/paths.test.ts broker/spawn.test.ts outbound-outbox.test.ts codex/*.test.ts",
+    "test": "tsx --test broker/*.test.ts outbound-outbox.test.ts codex/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
@@ -52,6 +52,9 @@
     "multi-agent",
     "pi"
   ],
+  "dependencies": {
+    "@dataforxyz/agent-intercom-core": "git+https://github.com/dataforxyz/agent-intercom-core.git#12d686bc90e15221a144fb3f4825679630b8a687"
+  },
   "optionalDependencies": {
     "node-pty": "^1.1.0"
   },
