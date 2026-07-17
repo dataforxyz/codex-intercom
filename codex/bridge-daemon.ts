@@ -8,7 +8,7 @@ import { spawnBrokerIfNeeded } from "../broker/spawn.ts";
 import { DEFAULT_ASK_TIMEOUT_MS, loadConfig, validateAskTimeoutMs } from "../config.ts";
 import type { Message, SessionInfo } from "../types.ts";
 import { resolveContactTarget, type IntercomContact } from "./contact.ts";
-import { formatAttachments, formatSessionList, resolveSessionTarget, type ToolResult } from "./runtime.ts";
+import { formatAttachments, formatSessionDisplay, formatSessionList, resolveSessionTarget, type ToolResult } from "./runtime.ts";
 import { formatIntercomTeam, resolveIntercomTeam } from "./team.ts";
 
 interface TurnWaiter {
@@ -74,7 +74,7 @@ function formatMessage(from: SessionInfo, message: Message, agent: BridgeAgentCo
   const custom = agent.instructions ? `\n\nAgent instructions:\n${agent.instructions}` : "";
   return [
     `Intercom message for ${agent.name}.`,
-    `From: ${from.name || from.id} (${from.id})`,
+    `From: ${formatSessionDisplay(from)} (${from.id})`,
     `Message id: ${message.id}`,
     "",
     message.content.text,
