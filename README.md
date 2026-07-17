@@ -221,6 +221,19 @@ to read-only.
 The sidecar inherits `CODEX_HOME`, which makes it useful with a normal Codex
 home or a dedicated minimal home.
 
+Every packaged executable writes one machine-searchable identity line to stderr
+before application startup:
+
+```text
+[agent-intercom-build] package=@dataforxyz/agent-intercom-codex version=0.10.0 target=coi sourceSha256=<64-hex-source-identity>
+```
+
+`dist/build-info.json` records the same deterministic runtime-source identity.
+Use the line from the actual process journal—not the current file path or
+mtime—to prove which bundle a remote worker loaded. Test-only changes do not
+alter the identity; any runtime, build-script, package, or pinned-dependency
+change does.
+
 ## Minimal Wakeable Profile
 
 A minimal profile is useful for workers that should stay focused on code and

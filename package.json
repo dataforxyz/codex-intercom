@@ -42,7 +42,7 @@
     "codex:mcp": "tsx codex/server.ts",
     "codex:bridge": "tsx codex/bridge-daemon.ts",
     "coi": "tsx codex/coi.ts",
-    "test": "tsx --test broker/*.test.ts outbound-outbox.test.ts codex/*.test.ts",
+    "test": "tsx --test broker/*.test.ts outbound-outbox.test.ts codex/*.test.ts scripts/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+process.stderr.write("[agent-intercom-build] package=@dataforxyz/agent-intercom-codex version=0.10.0 target=bridge-daemon sourceSha256=1af33a5dbe64d7a2c0abe37939eb618a290553662e81793e5d0b0598fd73af11\n");
 
 // codex/bridge-daemon.ts
 import { once } from "node:events";

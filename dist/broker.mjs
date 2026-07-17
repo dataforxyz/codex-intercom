@@ -1,3 +1,5 @@
+process.stderr.write("[agent-intercom-build] package=@dataforxyz/agent-intercom-codex version=0.10.0 target=broker sourceSha256=1af33a5dbe64d7a2c0abe37939eb618a290553662e81793e5d0b0598fd73af11\n");
+
 // broker/broker.ts
 import net from "net";
 import { existsSync as existsSync2, readFileSync as readFileSync4, renameSync as renameSync2, writeFileSync as writeFileSync3, unlinkSync as unlinkSync2 } from "fs";
